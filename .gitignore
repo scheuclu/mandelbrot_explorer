@@ -1,2 +1,15 @@
+# Python
 venv/
+.venv/
+__pycache__/
 output/
+
+# Node / Next.js (web/ also has its own .gitignore)
+node_modules/
+.next/
+
+# Rendered artifacts
+*.mp4
+
+.DS_Store
+.idea/
