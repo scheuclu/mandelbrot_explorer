@@ -10,6 +10,7 @@ node_modules/
 
 # Rendered artifacts
 *.mp4
+/aaa
 
 .DS_Store
 .idea/
