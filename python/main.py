@@ -1,6 +1,8 @@
 import argparse
 import os
+import subprocess
 
+import mlx.core as mx
 import numpy as np
 from matplotlib import colormaps
 from PIL import Image
@@ -45,19 +47,27 @@ PALETTES = {
 }
 
 
+@mx.compile
+def _step(Z, C, Z_final):
+    Z = Z**2 + C
+    Z_final = Z_final + mx.isnan(Z.real).astype(mx.int32)
+    return Z, Z_final
+
+
 def create_frame(center, w, h, nw, nh, palette_fn):
-    Z = np.zeros(shape=(nh, nw), dtype=complex)
-    x = np.linspace(center[0] - w / 2, center[0] + w / 2, nw)
-    y = np.linspace(center[1] - h / 2, center[1] + h / 2, nh)
-    Y, X = np.meshgrid(x, y)
-    C = X * complex(0, 1) + Y
+    real = mx.linspace(center[0] - w / 2, center[0] + w / 2, nw)
+    imag = mx.linspace(center[1] - h / 2, center[1] + h / 2, nh)
+    real_grid, imag_grid = mx.meshgrid(real, imag)
+    C = real_grid.astype(mx.complex64) + 1j * imag_grid.astype(mx.complex64)
+    mx.eval(C)
 
-    Z_final = np.zeros(shape=(nh, nw), dtype=int)
+    Z = mx.zeros((nh, nw), dtype=mx.complex64)
+    Z_final = mx.zeros((nh, nw), dtype=mx.int32)
     for _ in range(255):
-        Z = Z**2 + C
-        Z_final += np.isnan(Z).astype("int")
+        Z, Z_final = _step(Z, C, Z_final)
+        mx.eval(Z, Z_final)
 
-    colors = palette_fn(Z_final)
+    colors = palette_fn(np.array(Z_final))
     return Image.fromarray(np.uint8(colors * 255))
 
 
@@ -73,20 +83,43 @@ def main():
     palette_fn = PALETTES[args.palette]
 
     center = (-0.7450450892059, 0.1126120218022)
-    N = 5
-    w = 1.92 * 2.0 * 1e-12
-    h = 1.08 * 2.0 * 1e-12
+    w = 1.92 * 2.0 * 1e-2
+    h = 1.08 * 2.0 * 1e-2
     nw = 192 * 40
     nh = 108 * 40
 
+    # Stop when adjacent pixels are indistinguishable in float32 (MLX uses complex64)
+    center_scale = max(abs(center[0]), abs(center[1]))
+    precision_limit = nw * float(np.spacing(np.float32(center_scale)))
+
     os.makedirs("output", exist_ok=True)
 
-    for i in range(N):
+    i = 0
+    while w > precision_limit:
         img = create_frame(center=center, w=w, h=h, nw=nw, nh=nh, palette_fn=palette_fn)
         img.save(f"output/image_{i:04d}_{args.palette}.png")
-        print(f"frame {i}")
-        w *= 0.98
-        h *= 0.98
+        print(f"frame {i:4d}  w={w:.3e}  limit={precision_limit:.3e}")
+        w *= 0.99
+        h *= 0.99
+        i += 1
+    print(f"Done — {i} frames rendered")
+
+    output_file = f"zoom_{args.palette}.mp4"
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-framerate", "30",
+            "-pattern_type", "glob",
+            "-i", f"output/image_*_{args.palette}.png",
+            "-c:v", "libx265",
+            "-crf", "15",
+            "-preset", "slow",
+            "-pix_fmt", "yuv420p",
+            output_file,
+        ],
+        check=True,
+    )
+    print(f"Video saved to {output_file}")
 
 
 if __name__ == "__main__":

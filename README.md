@@ -1,29 +1,60 @@
 # Mandelbrot visualizer
-## Python edition
 
-This is a Python implementaion of the Mandelbrot visualizer.
-As you can see, this is significantly simpler. It also runs just as fast, thanks to the inherent vectorization of numpy.
+Two implementations of the same fractal:
+
+| | |
+|---|---|
+| [`web/`](web) | Interactive GPU explorer (Next.js + WebGL2). Real-time pan/zoom, all computation client side. |
+| [`python/`](python) | Offline batch renderer (MLX/numpy) that produces zoom videos, plus the original Streamlit app. |
 
 ---
 
-## Setup
+## Web explorer
 
 ```bash
-pip install -r requirements.txt
+cd web
+npm install
+npm run dev     # http://localhost:3000
 ```
 
-## Run
+Drag to pan, scroll or pinch to zoom, double-click to zoom in (shift-double-click
+to zoom out). Arrow keys pan, `+`/`-` zoom, `0` resets.
+
+- **Everything runs in a fragment shader** — one full-screen triangle, no
+  per-pixel work in JavaScript, no server round-trips.
+- **Deep zoom.** Below a viewport span of ~2e-4 plain 32-bit floats run out of
+  mantissa and the image blocks up, so the renderer transparently switches to an
+  emulated double-precision ("double-single") kernel with ~48 mantissa bits.
+  That extends usable zoom from roughly 1e4x to about 1e12x.
+- **Progressive refinement.** While you are dragging it renders at reduced
+  resolution with anti-aliasing off, then repaints at full quality once the view
+  settles.
+- 7 palettes, adjustable color cycle and shift, auto or manual iteration limit.
+- Export the current view as PNG up to 8K.
+- The view is encoded in the URL hash, so any location is a shareable link.
+
+## Python renderer
+
 ```bash
-python main.py
+cd python
+uv sync
+uv run python main.py --palette inferno
 ```
 
-## Combine images into a video
+Renders a progressive zoom sequence into `python/output/` and encodes it to
+`zoom_<palette>.mp4` with ffmpeg. Palettes: `inferno`, `original`, `sqrt`,
+`cyclic`. The zoom stops automatically once the viewport width reaches the
+float32 precision limit.
+
+The original Streamlit explorer is still there:
 
 ```bash
-ffmpeg -framerate 30 -pattern_type glob -i 'image_*.png' -c:v libx264 -pix_fmt yuv420p out.mp4
-  ```
-  ---
-  
-  **Click to watch the video.**  
-  [![IMAGE ALT TEXT HERE](https://img.youtube.com/vi/yVMQ_w54QVE/0.jpg)](https://www.youtube.com/watch?v=yVMQ_w54QVE)
+uv run streamlit run webpage.py
+```
 
+---
+
+**Click to watch the video.**
+[![Mandelbrot zoom](https://img.youtube.com/vi/yVMQ_w54QVE/0.jpg)](https://www.youtube.com/watch?v=yVMQ_w54QVE)
+
+Developed by [Lukas Scheucher](https://www.linkedin.com/in/scheuclu/).
