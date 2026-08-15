@@ -13,7 +13,14 @@ function Field({ label, value }: { label: string; value: string }) {
 }
 
 export function StatusBar({ readout }: { readout: Readout }) {
-  const { view, maxIter, deep, fps, atPrecisionFloor } = readout;
+  const { view, maxIter, kernel, orbitLength, fps, atPrecisionFloor } = readout;
+
+  const precisionLabel =
+    kernel === "perturb"
+      ? `perturbation (orbit ${orbitLength})`
+      : kernel === "double"
+        ? "double (48-bit)"
+        : "single (24-bit)";
 
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-wrap items-center gap-x-5 gap-y-1 overflow-hidden bg-gradient-to-t from-black/80 to-transparent px-4 pb-3 pt-8 font-mono text-[11px] leading-tight">
@@ -21,7 +28,7 @@ export function StatusBar({ readout }: { readout: Readout }) {
       <Field label="im" value={formatCoord(view.centerY, view.spanY)} />
       <Field label="zoom" value={formatZoom(view)} />
       <Field label="iter" value={String(maxIter)} />
-      <Field label="precision" value={deep ? "double (48-bit)" : "single (24-bit)"} />
+      <Field label="precision" value={precisionLabel} />
       <Field label="fps" value={fps > 0 ? fps.toFixed(0) : "–"} />
       {atPrecisionFloor && (
         <span className="whitespace-nowrap text-amber-300/90">

@@ -172,26 +172,107 @@ float escape(vec2 crHi, vec2 ciHi) {
 }
 `;
 
+/**
+ * Perturbation kernel with Zhuoran rebasing.
+ *
+ * Instead of iterating each pixel's own coordinate, iterate its deviation from
+ * a shared high-precision reference orbit:
+ *
+ *     delta_{n+1} = 2*Z_n*delta_n + delta_n^2 + delta_c
+ *
+ * The deviation only needs *relative* precision, so it never runs out of
+ * exponent the way an absolute coordinate does — the zoom ceiling disappears.
+ *
+ * The delta is carried in df64 rather than plain floats. That is not optional:
+ * with float32 deltas, escape counts diverge from ground truth on several
+ * percent of pixels once past a few thousand iterations.
+ *
+ * Rebasing handles the case where the orbit passes closer to zero than the
+ * deviation does — the point where the linearisation would otherwise break down
+ * and produce the classic perturbation "glitches". Folding z back into delta and
+ * restarting the reference index avoids them without a second reference orbit.
+ */
+const ESCAPE_PERTURB = `
+uniform sampler2D uOrbit;
+uniform ivec2 uOrbitSize;
+uniform int uOrbitLength;
+
+vec4 orbitAt(int i) {
+  return texelFetch(uOrbit, ivec2(i % uOrbitSize.x, i / uOrbitSize.x), 0);
+}
+
+float escape(vec2 dcr, vec2 dci) {
+  vec2 dr = vec2(0.0);
+  vec2 di = vec2(0.0);
+  int m = 0;
+  vec4 Z = orbitAt(0);
+
+  for (int n = 0; n < uMaxIter; n++) {
+    // delta = 2*Z*delta + delta^2 + dc
+    vec2 zdr = dfAdd(dfMul(Z.xy, dr), -dfMul(Z.zw, di));
+    vec2 zdi = dfAdd(dfMul(Z.xy, di), dfMul(Z.zw, dr));
+    vec2 sqr = dfAdd(dfMul(dr, dr), -dfMul(di, di));
+    vec2 sqi = dfMul(dfAdd(dr, dr), di);
+
+    dr = dfAdd(dfAdd(dfAdd(zdr, zdr), sqr), dcr);
+    di = dfAdd(dfAdd(dfAdd(zdi, zdi), sqi), dci);
+    m++;
+
+    Z = orbitAt(m);
+    vec2 tr = dfAdd(Z.xy, dr);
+    vec2 ti = dfAdd(Z.zw, di);
+
+    float zr = tr.x + tr.y;
+    float zi = ti.x + ti.y;
+    float mag = zr * zr + zi * zi;
+    if (mag > BAILOUT2) return smoothCount(n, mag);
+
+    float er = dr.x;
+    float ei = di.x;
+    // Rebase when the reference is nearer zero than the deviation, or when the
+    // reference orbit has run out (it escaped earlier than this pixel).
+    if (mag < er * er + ei * ei || m >= uOrbitLength - 1) {
+      dr = tr;
+      di = ti;
+      m = 0;
+      Z = orbitAt(0);
+    }
+  }
+  return -1.0;
+}
+`;
+
+export type KernelMode = "single" | "double" | "perturb";
+
 export interface ShaderVariant {
-  /** Use emulated double precision instead of plain floats. */
-  deep: boolean;
+  kernel: KernelMode;
   /** Supersampling grid size per axis: 1 = off, 2 = 4 samples, 3 = 9 samples. */
   aa: number;
 }
 
-export function buildFragmentShader({ deep, aa }: ShaderVariant): string {
+export function buildFragmentShader({ kernel, aa }: ShaderVariant): string {
+  const deep = kernel !== "single";
   const samplePos = `(gl_FragCoord.xy - 0.5 + (vec2(float(sx), float(sy)) + 0.5) / float(AA)) / uResolution`;
 
-  // In the deep path the pixel offset stays a plain float (it is tiny relative
-  // to the coordinates), but the add against the center must be done in df64.
-  const sampleColor = deep
-    ? `
+  let sampleColor: string;
+  if (kernel === "perturb") {
+    // The center never reaches the shader: it is baked into the reference
+    // orbit. Only the offset from that orbit's center matters, so the pixel
+    // offset is computed in df64 and added to the (small) center difference.
+    sampleColor = `
+      vec2 fx = dfMul(vec2(uv.x - 0.5, 0.0), uSpanX);
+      vec2 fy = dfMul(vec2(uv.y - 0.5, 0.0), uSpanY);
+      float sn = escape(dfAdd(uDeltaC0X, fx), dfAdd(uDeltaC0Y, fy));`;
+  } else if (kernel === "double") {
+    sampleColor = `
       vec2 off = (uv - 0.5) * uSpan;
       float sn = escape(dfAdd(uCenterX, vec2(off.x, 0.0)),
-                        dfAdd(uCenterY, vec2(off.y, 0.0)));`
-    : `
+                        dfAdd(uCenterY, vec2(off.y, 0.0)));`;
+  } else {
+    sampleColor = `
       vec2 off = (uv - 0.5) * uSpan;
       float sn = escape(vec2(uCenterX.x + off.x, uCenterY.x + off.y));`;
+  }
 
   return `#version 300 es
 precision highp float;
@@ -203,6 +284,10 @@ uniform vec2 uResolution;
 uniform vec2 uCenterX;     // (hi, lo) split of the real center
 uniform vec2 uCenterY;     // (hi, lo) split of the imaginary center
 uniform vec2 uSpan;        // viewport size in the complex plane
+uniform vec2 uSpanX;       // df64 span, perturbation path
+uniform vec2 uSpanY;
+uniform vec2 uDeltaC0X;    // df64 offset from the reference orbit's center
+uniform vec2 uDeltaC0Y;
 uniform int  uMaxIter;
 uniform int  uPalette;
 uniform float uColorCycle;
@@ -221,7 +306,7 @@ float smoothCount(int i, float m2) {
 
 ${PALETTE_GLSL}
 ${deep ? DF64_GLSL : ""}
-${deep ? ESCAPE_DEEP : ESCAPE_SINGLE}
+${kernel === "perturb" ? ESCAPE_PERTURB : kernel === "double" ? ESCAPE_DEEP : ESCAPE_SINGLE}
 
 void main() {
   vec3 acc = vec3(0.0);

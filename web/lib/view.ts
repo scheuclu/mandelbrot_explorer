@@ -1,32 +1,45 @@
+import {
+  type BigFloat,
+  addNumber,
+  fromNumber,
+  fromString,
+  toDecimalString,
+  toNumber,
+} from "./bigfloat";
+
 /**
  * Viewport math and URL-hash serialization.
  *
- * A view is a center point in the complex plane plus the vertical span the
- * canvas covers. The horizontal span follows from the canvas aspect ratio, so
- * resizing the window never distorts the set.
+ * The center is arbitrary-precision: past ~1e15x zoom a float64 can no longer
+ * distinguish neighbouring pixels, so no amount of shader precision would help.
+ * The span stays a plain number — it is small, and a double's exponent range
+ * goes far deeper than any zoom we support.
  */
 
 export interface View {
-  centerX: number;
-  centerY: number;
+  centerX: BigFloat;
+  centerY: BigFloat;
   spanY: number;
 }
 
 /** Vertical span of the fully zoomed-out view; also the zoom=1 reference. */
 export const HOME_SPAN = 2.6;
 
-export const HOME_VIEW: View = { centerX: -0.6, centerY: 0, spanY: HOME_SPAN };
+export const HOME_VIEW: View = {
+  centerX: fromNumber(-0.6),
+  centerY: fromNumber(0),
+  spanY: HOME_SPAN,
+};
 
 export const MAX_SPAN = 8;
 
 /**
- * Zooming past this turns the image to mush: double-single arithmetic carries
- * ~48 mantissa bits, which runs out a little below 1e-12 for coordinates of
- * order 1.
+ * Practical floor. Perturbation itself has no precision ceiling, so what limits
+ * us now is iteration count and patience rather than arithmetic.
  */
-export const MIN_SPAN = 1e-13;
+export const MIN_SPAN = 1e-60;
 
-/** Below this span the plain-float kernel visibly blocks up, so switch to df64. */
+/** Below this span plain floats visibly block up, so a deep kernel is needed. */
 export const DEEP_SPAN_THRESHOLD = 2e-4;
 
 export function clampView(view: View): View {
@@ -44,7 +57,7 @@ export function zoomFactor(view: View): number {
 /** Iteration budget that keeps detail visible as the zoom deepens. */
 export function autoIterations(spanY: number): number {
   const zoom = Math.max(1, HOME_SPAN / spanY);
-  return Math.min(6000, Math.round(120 + 90 * Math.log2(zoom)));
+  return Math.min(24000, Math.round(120 + 90 * Math.log2(zoom)));
 }
 
 /**
@@ -63,15 +76,14 @@ export function zoomAt(
   const fx = px / width - 0.5;
   const fy = 0.5 - py / height; // canvas y grows downward, imaginary axis upward
 
-  const anchorRe = view.centerX + fx * spanX;
-  const anchorIm = view.centerY + fy * view.spanY;
-
   const nextSpanY = Math.min(MAX_SPAN, Math.max(MIN_SPAN, view.spanY * factor));
   const nextSpanX = nextSpanY * (width / height);
 
+  // center' = (center + fx*span) - fx*span'   — all offsets are tiny doubles,
+  // so only the accumulated center needs high precision.
   return {
-    centerX: anchorRe - fx * nextSpanX,
-    centerY: anchorIm - fy * nextSpanY,
+    centerX: addNumber(view.centerX, fx * spanX - fx * nextSpanX),
+    centerY: addNumber(view.centerY, fy * view.spanY - fy * nextSpanY),
     spanY: nextSpanY,
   };
 }
@@ -86,16 +98,19 @@ export function panByPixels(
 ): View {
   const spanX = view.spanY * (width / height);
   return {
-    centerX: view.centerX - (dxPixels / width) * spanX,
-    centerY: view.centerY + (dyPixels / height) * view.spanY,
+    centerX: addNumber(view.centerX, -(dxPixels / width) * spanX),
+    centerY: addNumber(view.centerY, (dyPixels / height) * view.spanY),
     spanY: view.spanY,
   };
 }
 
 /** Enough decimals to distinguish neighbouring pixels at the current zoom. */
-export function formatCoord(value: number, spanY: number): string {
-  const decimals = Math.min(20, Math.max(4, Math.ceil(-Math.log10(spanY)) + 4));
-  return value.toFixed(decimals);
+export function coordDigits(spanY: number): number {
+  return Math.min(80, Math.max(4, Math.ceil(-Math.log10(spanY)) + 4));
+}
+
+export function formatCoord(value: BigFloat, spanY: number): string {
+  return toDecimalString(value, coordDigits(spanY));
 }
 
 export function formatZoom(view: View): string {
@@ -115,9 +130,9 @@ export interface SharedState extends View {
 
 export function encodeHash(state: SharedState): string {
   const params = new URLSearchParams();
-  // toPrecision(17) round-trips a double exactly.
-  params.set("x", state.centerX.toPrecision(17));
-  params.set("y", state.centerY.toPrecision(17));
+  const digits = coordDigits(state.spanY) + 4;
+  params.set("x", toDecimalString(state.centerX, digits));
+  params.set("y", toDecimalString(state.centerY, digits));
   // Drop the "+" from positive exponents: a literal + in a query string decodes
   // back as a space, which would silently break hand-edited or relayed links.
   params.set("s", state.spanY.toExponential(12).replace("e+", "e"));
@@ -141,20 +156,23 @@ export function decodeHash(hash: string): SharedState | null {
     return Number.isFinite(parsed) ? parsed : undefined;
   };
 
-  const centerX = num("x");
-  const centerY = num("y");
+  const rawX = params.get("x");
+  const rawY = params.get("y");
   const spanY = num("s");
-  if (centerX === undefined || centerY === undefined || spanY === undefined) {
-    return null;
-  }
+  if (rawX === null || rawY === null || spanY === undefined) return null;
 
   return {
-    centerX,
-    centerY,
+    centerX: fromString(rawX),
+    centerY: fromString(rawY),
     spanY: Math.min(MAX_SPAN, Math.max(MIN_SPAN, spanY)),
     palette: params.get("p") ?? undefined,
     maxIter: num("i"),
     colorCycle: num("c"),
     colorOffset: num("o"),
   };
+}
+
+/** Coarse doubles for the shallow kernels, which do not need more. */
+export function centerAsNumbers(view: View): [number, number] {
+  return [toNumber(view.centerX), toNumber(view.centerY)];
 }

@@ -1,6 +1,8 @@
-import { VERTEX_SHADER, buildFragmentShader } from "./shader";
+import { type ReferenceOrbit, orbitTextureSize } from "./reference";
+import { type KernelMode, VERTEX_SHADER, buildFragmentShader } from "./shader";
 
 export interface RenderParams {
+  /** Only used by the single/double kernels; perturbation bakes it into the orbit. */
   centerX: number;
   centerY: number;
   spanY: number;
@@ -10,9 +12,12 @@ export interface RenderParams {
   colorOffset: number;
   /** Supersampling grid per axis: 1, 2 or 3. */
   aa: number;
-  /** Use the emulated-double kernel. */
-  deep: boolean;
+  kernel: KernelMode;
   interior: [number, number, number];
+  /** Required when kernel is "perturb". */
+  orbit?: ReferenceOrbit | null;
+  /** Offset of the view center from the orbit's center, in complex units. */
+  deltaC?: [number, number];
 }
 
 interface ProgramInfo {
@@ -25,11 +30,18 @@ const UNIFORM_NAMES = [
   "uCenterX",
   "uCenterY",
   "uSpan",
+  "uSpanX",
+  "uSpanY",
+  "uDeltaC0X",
+  "uDeltaC0Y",
   "uMaxIter",
   "uPalette",
   "uColorCycle",
   "uColorOffset",
   "uInteriorColor",
+  "uOrbit",
+  "uOrbitSize",
+  "uOrbitLength",
 ] as const;
 
 /**
@@ -66,6 +78,11 @@ export class MandelbrotRenderer {
   private programs = new Map<string, ProgramInfo>();
   private disposed = false;
 
+  private orbitTexture: WebGLTexture | null = null;
+  /** Identity of the orbit currently on the GPU, to skip redundant uploads. */
+  private uploadedOrbit: ReferenceOrbit | null = null;
+  private orbitDims: [number, number] = [1, 1];
+
   constructor(canvas: HTMLCanvasElement) {
     const gl = canvas.getContext("webgl2", {
       alpha: false,
@@ -89,8 +106,8 @@ export class MandelbrotRenderer {
     return this.gl.getParameter(this.gl.MAX_RENDERBUFFER_SIZE) as number;
   }
 
-  private getProgram(deep: boolean, aa: number): ProgramInfo {
-    const key = `${deep ? "d" : "s"}${aa}`;
+  private getProgram(kernel: KernelMode, aa: number): ProgramInfo {
+    const key = `${kernel}${aa}`;
     const cached = this.programs.get(key);
     if (cached) return cached;
 
@@ -98,7 +115,7 @@ export class MandelbrotRenderer {
     const fragment = compile(
       gl,
       gl.FRAGMENT_SHADER,
-      buildFragmentShader({ deep, aa }),
+      buildFragmentShader({ kernel, aa }),
     );
     const program = gl.createProgram();
     if (!program) throw new Error("Failed to allocate program");
@@ -122,9 +139,41 @@ export class MandelbrotRenderer {
     return info;
   }
 
+  /** Upload a reference orbit as an RGBA32F texture (skipped if unchanged). */
+  private bindOrbit(orbit: ReferenceOrbit): [number, number] {
+    const gl = this.gl;
+
+    if (!this.orbitTexture) this.orbitTexture = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.orbitTexture);
+
+    if (this.uploadedOrbit !== orbit) {
+      const [width, height] = orbitTextureSize(orbit.length);
+      // texImage2D needs the full rectangle, so pad the tail of the last row.
+      const padded = new Float32Array(width * height * 4);
+      padded.set(orbit.data.subarray(0, Math.min(orbit.data.length, padded.length)));
+
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.texImage2D(
+        gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, padded,
+      );
+      // Integer indexing only — filtering would blend unrelated iterations.
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+      this.uploadedOrbit = orbit;
+      this.orbitDims = [width, height];
+    }
+    return this.orbitDims;
+  }
+
   private draw(width: number, height: number, params: RenderParams): void {
     const gl = this.gl;
-    const { program, uniforms } = this.getProgram(params.deep, params.aa);
+    const kernel =
+      params.kernel === "perturb" && !params.orbit ? "double" : params.kernel;
+    const { program, uniforms } = this.getProgram(kernel, params.aa);
 
     gl.useProgram(program);
     gl.bindVertexArray(this.vao);
@@ -139,6 +188,18 @@ export class MandelbrotRenderer {
     gl.uniform2f(uniforms.uCenterY, cyHi, cyLo);
     gl.uniform2f(uniforms.uSpan, spanX, params.spanY);
     gl.uniform1i(uniforms.uMaxIter, Math.max(1, Math.round(params.maxIter)));
+
+    if (kernel === "perturb" && params.orbit) {
+      const [ow, oh] = this.bindOrbit(params.orbit);
+      const [dx, dy] = params.deltaC ?? [0, 0];
+      gl.uniform2f(uniforms.uSpanX, ...splitDouble(spanX));
+      gl.uniform2f(uniforms.uSpanY, ...splitDouble(params.spanY));
+      gl.uniform2f(uniforms.uDeltaC0X, ...splitDouble(dx));
+      gl.uniform2f(uniforms.uDeltaC0Y, ...splitDouble(dy));
+      gl.uniform1i(uniforms.uOrbit, 0);
+      gl.uniform2i(uniforms.uOrbitSize, ow, oh);
+      gl.uniform1i(uniforms.uOrbitLength, params.orbit.length);
+    }
     gl.uniform1i(uniforms.uPalette, params.palette);
     gl.uniform1f(uniforms.uColorCycle, Math.max(1, params.colorCycle));
     gl.uniform1f(uniforms.uColorOffset, params.colorOffset);
@@ -220,6 +281,8 @@ export class MandelbrotRenderer {
   /** Drop cached programs after a context loss so they get rebuilt. */
   invalidate(): void {
     this.programs.clear();
+    this.orbitTexture = null;
+    this.uploadedOrbit = null;
   }
 
   dispose(): void {
@@ -230,6 +293,9 @@ export class MandelbrotRenderer {
     this.programs.clear();
     gl.deleteShader(this.vertexShader);
     if (this.vao) gl.deleteVertexArray(this.vao);
+    if (this.orbitTexture) gl.deleteTexture(this.orbitTexture);
     this.vao = null;
+    this.orbitTexture = null;
+    this.uploadedOrbit = null;
   }
 }

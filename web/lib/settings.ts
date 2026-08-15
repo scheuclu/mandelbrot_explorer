@@ -1,6 +1,6 @@
 import { DEFAULT_PALETTE } from "./palettes";
 
-export type PrecisionMode = "auto" | "single" | "double";
+export type PrecisionMode = "auto" | "single" | "double" | "perturb";
 
 export interface Settings {
   palette: string;
@@ -44,5 +44,6 @@ export const LIVE_SCALE_OPTIONS = [
 export const PRECISION_OPTIONS: { value: PrecisionMode; label: string }[] = [
   { value: "auto", label: "Auto" },
   { value: "single", label: "Single (fast)" },
-  { value: "double", label: "Double (deep)" },
+  { value: "double", label: "Double (to 1e12x)" },
+  { value: "perturb", label: "Perturbation (unlimited)" },
 ];

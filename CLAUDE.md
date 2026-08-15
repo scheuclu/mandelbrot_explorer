@@ -49,22 +49,36 @@ grid with MLX, iterates Z = Z² + C for a fixed 255 steps, counts divergence via
 
 The render loop lives entirely on the GPU. Nothing is recomputed in JS per pixel.
 
-- **`lib/shader.ts`** — generates the GLSL. Two escape-time kernels are built
+- **`lib/shader.ts`** — generates the GLSL. Three escape-time kernels are built
   from one template:
   - *single*: plain `float`. Fast, breaks down below a viewport span of ~2e-4.
-  - *deep*: "double-single" (df64) arithmetic — each value is an unevaluated sum
-    of two floats (~48 mantissa bits). ~10x slower, usable to a span of ~1e-12.
+  - *double*: "double-single" (df64) arithmetic — each value is an unevaluated
+    sum of two floats (~48 mantissa bits). Usable to a span of ~1e-12.
+  - *perturb*: perturbation against a high-precision reference orbit, with
+    Zhuoran rebasing. No precision ceiling. This is what `auto` uses below the
+    deep threshold.
 
   The anti-aliasing factor is a compile-time constant so the sample loop
-  unrolls; the renderer caches one program per `(deep, aa)` pair.
+  unrolls; the renderer caches one program per `(kernel, aa)` pair.
+
+- **`lib/bigfloat.ts`** — BigInt fixed-point reals (320-bit). Only the view
+  center needs this: past ~1e15x a float64 cannot distinguish neighbouring
+  pixels, so shader precision alone would not help.
+
+- **`lib/reference.ts`** — computes the reference orbit `Z_n` at full precision
+  and packs it as `(Zr_hi, Zr_lo, Zi_hi, Zi_lo)` per iteration for an RGBA32F
+  texture. `orbitIsUsable()` decides when a cached orbit can be reused; reusing
+  across small pans is what keeps dragging smooth.
 
 - **`lib/renderer.ts`** — WebGL2 wrapper. Draws a full-screen triangle from
   `gl_VertexID` (no vertex buffers). `splitDouble()` splits a JS double into the
-  (hi, lo) float pair the deep kernel expects. `renderToPixels()` renders
-  offscreen to a renderbuffer for PNG export without disturbing the canvas.
+  (hi, lo) float pair the deep kernels expect. Uploads the orbit texture, skipping
+  the upload when the orbit is unchanged. `renderToPixels()` renders offscreen to
+  a renderbuffer for PNG export without disturbing the canvas.
 
 - **`lib/view.ts`** — viewport math (`zoomAt`, `panByPixels`), the precision
-  threshold constants, and URL-hash encoding.
+  threshold constants, and URL-hash encoding. The center is a `BigFloat`; spans
+  and pixel offsets stay plain numbers.
 
 - **`components/MandelbrotExplorer.tsx`** — owns the rAF render loop. The view
   lives in a **ref**, not React state, so panning never triggers a React render;
@@ -72,7 +86,16 @@ The render loop lives entirely on the GPU. Nothing is recomputed in JS per pixel
   it renders at a fraction of full resolution with AA off, then repaints sharp
   ~180ms after the view settles.
 
-**Precision matters here.** When editing the view or renderer, remember that the
-center coordinate must reach the shader as a split (hi, lo) pair — collapsing it
-to a single float caps zoom at ~1e4x. `MIN_SPAN` in `lib/view.ts` is the df64
-floor; below it the image degrades into blocks.
+**Precision matters here.** Two rules that are easy to break by accident:
+
+- The perturbation delta must stay **df64**, not plain float. With float32
+  deltas, escape counts diverge from ground truth on 3–6% of pixels past a few
+  thousand iterations. This was measured against BigInt ground truth, not
+  assumed — see the validation notes in `web/README.md`.
+- The view center must stay a `BigFloat` end to end. Rounding it to a double
+  anywhere caps zoom at ~1e15x no matter what the shader does.
+
+When changing any of this, the cheap way to check correctness is to compare
+against a CPU reference in plain JS rather than eyeballing renders — and always
+report how many *distinct* values the reference produced. A uniform region makes
+any two implementations agree, which silently turns a validation into a no-op.

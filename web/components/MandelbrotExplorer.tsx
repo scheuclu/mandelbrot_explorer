@@ -2,10 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { toNumber } from "@/lib/bigfloat";
 import { EXPORT_SIZES, downloadPng, type ExportSizeId } from "@/lib/download";
 import { paletteIndex } from "@/lib/palettes";
 import { PRESETS } from "@/lib/presets";
+import {
+  type ReferenceOrbit,
+  computeReferenceOrbit,
+  orbitIsUsable,
+} from "@/lib/reference";
 import { MandelbrotRenderer, type RenderParams } from "@/lib/renderer";
+import type { KernelMode } from "@/lib/shader";
 import {
   DEFAULT_SETTINGS,
   type Settings,
@@ -17,6 +24,7 @@ import {
   type SharedState,
   type View,
   autoIterations,
+  centerAsNumbers,
   clampView,
   decodeHash,
   encodeHash,
@@ -34,7 +42,8 @@ const MAX_DPR = 2;
 export interface Readout {
   view: View;
   maxIter: number;
-  deep: boolean;
+  kernel: KernelMode;
+  orbitLength: number;
   fps: number;
   atPrecisionFloor: boolean;
 }
@@ -50,6 +59,7 @@ export function MandelbrotExplorer() {
   const interactingRef = useRef(false);
   const settleTimerRef = useRef<number | null>(null);
   const frameTimesRef = useRef<number[]>([]);
+  const orbitRef = useRef<ReferenceOrbit | null>(null);
 
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +69,8 @@ export function MandelbrotExplorer() {
   const [readout, setReadout] = useState<Readout>({
     view: HOME_VIEW,
     maxIter: autoIterations(HOME_VIEW.spanY),
-    deep: false,
+    kernel: "single",
+    orbitLength: 0,
     fps: 0,
     atPrecisionFloor: false,
   });
@@ -106,21 +117,50 @@ export function MandelbrotExplorer() {
       const maxIter = config.autoIter
         ? autoIterations(view.spanY)
         : config.maxIter;
-      const deep =
-        config.precision === "double" ||
-        (config.precision === "auto" && view.spanY < DEEP_SPAN_THRESHOLD);
-      return {
-        centerX: view.centerX,
-        centerY: view.centerY,
+
+      let kernel: KernelMode;
+      if (config.precision === "auto") {
+        // Perturbation everywhere deep: it has no precision ceiling, and the
+        // reference orbit is reused across small pans so it stays interactive.
+        kernel = view.spanY < DEEP_SPAN_THRESHOLD ? "perturb" : "single";
+      } else {
+        kernel = config.precision;
+      }
+
+      const [cx, cy] = centerAsNumbers(view);
+      const params: RenderParams = {
+        centerX: cx,
+        centerY: cy,
         spanY: view.spanY,
         maxIter,
         palette: paletteIndex(config.palette),
         colorCycle: config.colorCycle,
         colorOffset: config.colorOffset,
         aa: 1,
-        deep,
+        kernel,
         interior: INTERIOR_COLOR,
       };
+
+      if (kernel === "perturb") {
+        let orbit = orbitRef.current;
+        if (!orbitIsUsable(orbit, view.centerX, view.centerY, view.spanY, maxIter)) {
+          orbit = computeReferenceOrbit(
+            view.centerX,
+            view.centerY,
+            maxIter,
+            view.spanY,
+          );
+          orbitRef.current = orbit;
+        }
+        params.orbit = orbit;
+        // Where this view sits relative to the (possibly older) orbit center.
+        params.deltaC = [
+          toNumber(view.centerX - orbit.centerX),
+          toNumber(view.centerY - orbit.centerY),
+        ];
+      }
+
+      return params;
     },
     [],
   );
@@ -199,7 +239,8 @@ export function MandelbrotExplorer() {
         setReadout({
           view,
           maxIter: params.maxIter,
-          deep: params.deep,
+          kernel: params.kernel,
+          orbitLength: params.orbit?.length ?? 0,
           fps: span > 0 ? ((times.length - 1) / span) * 1000 : 0,
           atPrecisionFloor: view.spanY <= MIN_SPAN * 1.001,
         });

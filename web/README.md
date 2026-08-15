@@ -27,16 +27,54 @@ One full-screen triangle; the fragment shader does the escape-time iteration per
 pixel. There is no per-pixel work in JavaScript and nothing is computed on a
 server.
 
-**Precision.** The center coordinate is passed to the shader as a split
-`(hi, lo)` float pair rather than a single float. Below a viewport span of
-`DEEP_SPAN_THRESHOLD` (2e-4) the renderer switches to a kernel that does the
-whole iteration in "double-single" arithmetic — each value an unevaluated sum of
-two floats, giving ~48 mantissa bits instead of 24. That costs roughly 10x the
-work but extends usable zoom from about 1e4x to 1e12x. `MIN_SPAN` is the floor;
-past it the image degrades into blocks and the status bar says so.
+**Precision.** Three kernels, selected automatically by zoom depth:
 
-The shader output was validated against a float64 CPU reference: 99.4% of
-sampled pixels matched within 1/255, with a median difference of 0.
+| Kernel | Used when | Ceiling |
+|---|---|---|
+| `single` | span > 2e-4 | ~1e4x |
+| `double` | manual only | ~1e12x |
+| `perturb` | span ≤ 2e-4 | no precision ceiling |
+
+`single` is plain float32. `double` runs the whole iteration in "double-single"
+arithmetic (each value an unevaluated sum of two floats, ~48 mantissa bits).
+
+`perturb` is the interesting one. Rather than iterating each pixel's own
+coordinate, it iterates the pixel's *deviation* from one shared high-precision
+reference orbit:
+
+```
+delta_{n+1} = 2*Z_n*delta_n + delta_n^2 + delta_c
+```
+
+A deviation only needs relative precision, so it never runs out of exponent the
+way an absolute coordinate does — that is what removes the zoom ceiling. The
+reference orbit `Z_n` is computed on the CPU in BigInt fixed-point
+(`lib/bigfloat.ts`, 320-bit) and uploaded as an RGBA32F texture holding
+`(Zr_hi, Zr_lo, Zi_hi, Zi_lo)` per iteration.
+
+Two details matter:
+
+- **The delta must be df64, not float32.** With float32 deltas, escape counts
+  diverge from ground truth on 3–6% of pixels past a few thousand iterations.
+  Measured, not assumed.
+- **Rebasing** (Zhuoran's method): when the reference passes nearer zero than the
+  deviation, fold `z` back into the delta and restart the reference index. This
+  is what prevents the classic perturbation "glitches" without needing a second
+  reference orbit.
+
+The view center is also arbitrary-precision. Past ~1e15x a float64 can no longer
+distinguish neighbouring pixels, so no amount of shader precision would help.
+
+Orbits are reused across small pans (`orbitIsUsable`) so dragging stays smooth;
+recomputing every frame would stall.
+
+**Validation.** The perturbation algorithm was checked against BigInt
+fixed-point ground truth: 0 mismatches in 120 samples at both 1e-10 and 1e-13
+span, where a float32 delta gives 4–7. On the GPU it matches the independently
+validated `double` kernel on 98.45% of pixels, the remainder being near-boundary
+pixels where two accurate algorithms legitimately differ in the last iteration.
+The `double` kernel itself matched a float64 CPU reference on 99.4% of pixels,
+median difference 0.
 
 **Performance.** The view lives in a ref, not React state, so panning never
 triggers a React render. A dirty flag gates the rAF loop. While the pointer is
@@ -54,8 +92,10 @@ components/
   ControlPanel          settings UI
   StatusBar             coordinate / zoom / precision readout
 lib/
-  shader.ts             GLSL generation (single + df64 kernels, palettes)
-  renderer.ts           WebGL2 wrapper, offscreen export
+  shader.ts             GLSL generation (single / df64 / perturbation kernels)
+  renderer.ts           WebGL2 wrapper, orbit texture, offscreen export
+  bigfloat.ts           BigInt fixed-point reals for the view center
+  reference.ts          high-precision reference orbit + reuse policy
   view.ts               viewport math, URL hash encoding
   palettes.ts           palette metadata
   presets.ts            interesting locations
