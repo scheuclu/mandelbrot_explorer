@@ -33,6 +33,7 @@ import {
 } from "@/lib/view";
 import { ControlPanel } from "./ControlPanel";
 import { StatusBar } from "./StatusBar";
+import { WelcomeDialog, useWelcomeDialog } from "./WelcomeDialog";
 
 const INTERIOR_COLOR: [number, number, number] = [0, 0, 0];
 /** How long the view must hold still before the full-quality pass runs. */
@@ -60,12 +61,16 @@ export function MandelbrotExplorer() {
   const settleTimerRef = useRef<number | null>(null);
   const frameTimesRef = useRef<number[]>([]);
   const orbitRef = useRef<ReferenceOrbit | null>(null);
+  // Mirrored into a ref so the keyboard handler can ignore shortcuts while the
+  // dialog is up without re-registering its listeners on every toggle.
+  const infoOpenRef = useRef(false);
 
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [error, setError] = useState<string | null>(null);
   const [exportSize, setExportSize] = useState<ExportSizeId>("4k");
   const [exporting, setExporting] = useState(false);
   const [copied, setCopied] = useState(false);
+  const welcome = useWelcomeDialog();
   const [readout, setReadout] = useState<Readout>({
     view: HOME_VIEW,
     maxIter: autoIterations(HOME_VIEW.spanY),
@@ -277,6 +282,10 @@ export function MandelbrotExplorer() {
     dirtyRef.current = true;
   }, [settings]);
 
+  useEffect(() => {
+    infoOpenRef.current = welcome.open;
+  }, [welcome.open]);
+
   // --- URL hash -----------------------------------------------------------
 
   // Keep the address bar in sync once the view settles, so a reload or a
@@ -418,6 +427,9 @@ export function MandelbrotExplorer() {
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
+      // The welcome dialog owns the keyboard while it is open.
+      if (infoOpenRef.current) return;
+
       const target = event.target as HTMLElement | null;
       if (
         target &&
@@ -586,9 +598,12 @@ export function MandelbrotExplorer() {
         exportSize={exportSize}
         onExportSizeChange={setExportSize}
         onInvalidate={invalidate}
+        onShowInfo={welcome.show}
       />
 
       <StatusBar readout={readout} />
+
+      <WelcomeDialog open={welcome.open} onClose={welcome.close} />
     </div>
   );
 }
