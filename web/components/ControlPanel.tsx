@@ -110,7 +110,10 @@ export function ControlPanel({
   // inset-y-0 plus min-h-0 on the panel lets it scroll instead of running off
   // the bottom of the viewport; pb-10 keeps it clear of the status bar.
   return (
-    <div className="pointer-events-none absolute inset-y-0 left-0 z-20 flex flex-col p-3 pb-10">
+    <aside
+      aria-label="Render settings"
+      className="pointer-events-none absolute inset-y-0 left-0 z-20 flex flex-col p-3 pb-10"
+    >
       <div className="pointer-events-auto mb-2 flex items-center gap-2 self-start">
         <button
           type="button"
@@ -124,8 +127,8 @@ export function ControlPanel({
         <button
           type="button"
           onClick={onShowInfo}
-          aria-label="About this explorer"
-          title="About this explorer"
+          aria-label="How to use this explorer"
+          title="How to use this explorer"
           className="rounded-md border border-white/10 bg-black/60 px-3 py-1.5 text-xs font-medium text-white/60 backdrop-blur transition hover:bg-black/80 hover:text-white/90"
         >
           ?
@@ -304,6 +307,6 @@ export function ControlPanel({
           </p>
         </div>
       )}
-    </div>
+    </aside>
   );
 }

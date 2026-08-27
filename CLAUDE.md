@@ -20,9 +20,14 @@ uv sync                              # install dependencies
 uv run python main.py                # batch render + ffmpeg zoom video
 uv run python main.py --palette sqrt # inferno | original | sqrt | cyclic
 uv run streamlit run webpage.py      # legacy Streamlit explorer
+uv run python tools/gen_brand_assets.py   # regenerate the web favicon + social card
 ```
 
 `main.py` writes frames to `python/output/` and encodes `zoom_<palette>.mp4`.
+
+`tools/gen_brand_assets.py` renders `web/app/`'s favicon, app icons and Open
+Graph image from the real escape-time computation, using a numpy port of the
+shader's Ultra palette. Rerun it if that palette changes.
 
 ### Web (`web/`)
 
