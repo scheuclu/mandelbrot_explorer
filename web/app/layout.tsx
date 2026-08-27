@@ -22,6 +22,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  // Relative metadata URLs — including the generated opengraph-image and
+  // twitter-image routes — need an absolute origin, or Next resolves them
+  // against localhost and the social preview breaks wherever it is shared.
   metadataBase: new URL(SITE_URL),
   title: {
     default: SITE_TITLE,
