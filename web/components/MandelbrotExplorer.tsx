@@ -562,7 +562,7 @@ export function MandelbrotExplorer() {
       <canvas
         ref={canvasRef}
         className="absolute inset-0 h-full w-full cursor-grab touch-none select-none active:cursor-grabbing"
-        aria-label="Interactive Mandelbrot set"
+        aria-label="Interactive Mandelbrot set fractal. Drag to pan, scroll or pinch to zoom, arrow keys to move."
       />
 
       {error && (

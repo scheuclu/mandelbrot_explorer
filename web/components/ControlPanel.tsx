@@ -108,7 +108,10 @@ export function ControlPanel({
   // inset-y-0 plus min-h-0 on the panel lets it scroll instead of running off
   // the bottom of the viewport; pb-10 keeps it clear of the status bar.
   return (
-    <div className="pointer-events-none absolute inset-y-0 left-0 z-20 flex flex-col p-3 pb-10">
+    <aside
+      aria-label="Render settings"
+      className="pointer-events-none absolute inset-y-0 left-0 z-20 flex flex-col p-3 pb-10"
+    >
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
@@ -291,6 +294,6 @@ export function ControlPanel({
           </p>
         </div>
       )}
-    </div>
+    </aside>
   );
 }
