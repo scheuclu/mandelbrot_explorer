@@ -24,6 +24,7 @@ interface ControlPanelProps {
   exportSize: ExportSizeId;
   onExportSizeChange: (id: ExportSizeId) => void;
   onInvalidate: () => void;
+  onShowInfo: () => void;
 }
 
 const FIELD =
@@ -96,6 +97,7 @@ export function ControlPanel({
   exportSize,
   onExportSizeChange,
   onInvalidate,
+  onShowInfo,
 }: ControlPanelProps) {
   const [open, setOpen] = useState(true);
   const panelId = useId();
@@ -112,15 +114,26 @@ export function ControlPanel({
       aria-label="Render settings"
       className="pointer-events-none absolute inset-y-0 left-0 z-20 flex flex-col p-3 pb-10"
     >
-      <button
-        type="button"
-        onClick={() => setOpen((prev) => !prev)}
-        aria-expanded={open}
-        aria-controls={panelId}
-        className="pointer-events-auto mb-2 self-start rounded-md border border-white/10 bg-black/60 px-3 py-1.5 text-xs font-medium text-white/80 backdrop-blur transition hover:bg-black/80"
-      >
-        {open ? "Hide controls" : "Show controls"}
-      </button>
+      <div className="pointer-events-auto mb-2 flex items-center gap-2 self-start">
+        <button
+          type="button"
+          onClick={() => setOpen((prev) => !prev)}
+          aria-expanded={open}
+          aria-controls={panelId}
+          className="rounded-md border border-white/10 bg-black/60 px-3 py-1.5 text-xs font-medium text-white/80 backdrop-blur transition hover:bg-black/80"
+        >
+          {open ? "Hide controls" : "Show controls"}
+        </button>
+        <button
+          type="button"
+          onClick={onShowInfo}
+          aria-label="How to use this explorer"
+          title="How to use this explorer"
+          className="rounded-md border border-white/10 bg-black/60 px-3 py-1.5 text-xs font-medium text-white/60 backdrop-blur transition hover:bg-black/80 hover:text-white/90"
+        >
+          ?
+        </button>
+      </div>
 
       {open && (
         <div
