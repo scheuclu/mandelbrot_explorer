@@ -90,9 +90,6 @@ export function useWelcomeDialog(): {
 const FOCUSABLE =
   'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-const SECTION_LABEL =
-  "text-[11px] font-medium uppercase tracking-wider text-white/40";
-
 interface WelcomeDialogProps {
   open: boolean;
   /** Called for every dismissal path: the button, Escape, X, and the backdrop. */
@@ -153,7 +150,7 @@ export function WelcomeDialog({ open, onClose }: WelcomeDialogProps) {
       <div
         aria-hidden="true"
         onMouseDown={onClose}
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/60"
       />
 
       <div
@@ -162,7 +159,7 @@ export function WelcomeDialog({ open, onClose }: WelcomeDialogProps) {
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
-        className="relative max-h-[85dvh] w-full max-w-lg overflow-y-auto rounded-xl border border-white/10 bg-black/80 p-6 shadow-2xl backdrop-blur-md"
+        className="relative max-h-[85dvh] w-full max-w-md overflow-y-auto rounded-xl border border-white/10 bg-black/85 p-6 shadow-2xl backdrop-blur-xs"
       >
         <button
           type="button"
@@ -181,48 +178,37 @@ export function WelcomeDialog({ open, onClose }: WelcomeDialogProps) {
           id={descriptionId}
           className="mt-2 text-sm leading-relaxed text-white/70"
         >
-          A real-time explorer for the Mandelbrot set. Every pixel is computed
-          on your GPU with WebGL2 — nothing is rendered on a server, and no view
-          ever leaves your machine.
+          Real-time fractal deep zoom, computed on your GPU. Nothing is sent to
+          a server.
         </p>
 
-        <div className="mt-5 space-y-2">
-          <span className={SECTION_LABEL}>What you can do</span>
-          <ul className="list-disc space-y-1.5 pl-4 text-sm leading-relaxed text-white/70 marker:text-white/25">
-            <li>
-              Drag to pan, scroll or pinch to zoom, double-click to zoom in
-              (shift to zoom out).
-            </li>
-            <li>
-              Switch color palettes, tune the color cycle, or jump straight to a
-              preset location.
-            </li>
-            <li>
-              Share a view: <span className="text-white/85">Copy link</span>{" "}
-              puts the exact coordinates in the URL, so whoever opens it lands
-              in the same place.
-            </li>
-            <li>
-              Zoom essentially without limit. Once ordinary GPU floats run out
-              of digits the renderer switches to double-single and then
-              perturbation arithmetic, so there is no precision ceiling.
-            </li>
-          </ul>
-        </div>
+        <ul className="mt-5 list-disc space-y-2 pl-4 text-sm leading-relaxed text-white/70 marker:text-white/25">
+          <li>
+            <span className="text-white/90">Drag</span> to pan,{" "}
+            <span className="text-white/90">scroll</span> to zoom,{" "}
+            <span className="text-white/90">double-click</span> to dive in.
+          </li>
+          <li>
+            <span className="text-white/90">Palettes and presets</span> —
+            recolour, or jump to a known spot.
+          </li>
+          <li>
+            <span className="text-white/90">Copy link</span> — the URL carries
+            the exact view.
+          </li>
+          <li>
+            <span className="text-white/90">No zoom limit</span> — precision
+            escalates automatically as you descend.
+          </li>
+        </ul>
 
-        <div className="mt-5 space-y-2 rounded-lg border border-amber-400/25 bg-amber-400/5 p-3">
-          <span className="text-[11px] font-medium uppercase tracking-wider text-amber-300/80">
-            Download for the best image
-          </span>
-          <p className="text-sm leading-relaxed text-white/75">
-            The live canvas is deliberately cheap: while you drag or zoom it
-            renders at reduced resolution with anti-aliasing off, so it stays
-            responsive. <span className="text-white/90">Save PNG</span>{" "}
-            re-renders the very same view offscreen at full resolution — up to
-            8K — with anti-aliasing on. The downloaded image is noticeably
-            sharper than what you see on screen.
-          </p>
-        </div>
+        <p className="mt-5 rounded-lg border border-amber-400/25 bg-amber-400/5 p-3 text-sm leading-relaxed text-white/75">
+          <span className="font-medium text-amber-300/90">
+            Save PNG for the best image.
+          </span>{" "}
+          The canvas renders cheap while you move; the download is full
+          resolution with anti-aliasing, up to 8K.
+        </p>
 
         <div className="mt-6 flex items-center justify-between gap-4 border-t border-white/10 pt-4">
           <p className="text-[11px] leading-relaxed text-white/40">
@@ -233,7 +219,7 @@ export function WelcomeDialog({ open, onClose }: WelcomeDialogProps) {
             ref={confirmRef}
             type="button"
             onClick={onClose}
-            className="shrink-0 rounded-md bg-amber-400 px-4 py-2 text-xs font-semibold text-black transition hover:bg-amber-300"
+            className="shrink-0 rounded-md bg-amber-400 px-4 py-2 text-xs font-semibold text-black transition hover:bg-amber-300 motion-safe:animate-bouncy"
           >
             Let&rsquo;s go
           </button>

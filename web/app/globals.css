@@ -5,6 +5,32 @@
   --font-mono: var(--font-geist-mono);
 }
 
+@theme {
+  --animate-bouncy: bouncy 2.8s ease-in-out infinite;
+
+  /* Sits still for most of the cycle, then a quick double hop. A continuous
+     bounce next to a canvas you are trying to read is a nuisance. */
+  @keyframes bouncy {
+    0%,
+    64%,
+    100% {
+      transform: translateY(0);
+    }
+    73% {
+      transform: translateY(-5px);
+    }
+    82% {
+      transform: translateY(0);
+    }
+    89% {
+      transform: translateY(-2px);
+    }
+    96% {
+      transform: translateY(0);
+    }
+  }
+}
+
 html,
 body {
   height: 100%;
