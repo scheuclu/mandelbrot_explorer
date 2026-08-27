@@ -13,7 +13,14 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// Relative metadata URLs (the generated opengraph-image / twitter-image routes)
+// need an absolute origin, or Next falls back to localhost and the social
+// preview breaks everywhere it is shared.
+const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_URL ?? "https://mandelbrot-eosin.vercel.app";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: "Mandelbrot Explorer",
   description:
     "Explore the Mandelbrot set in real time. Rendered entirely on your GPU with WebGL.",
