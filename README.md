@@ -30,7 +30,8 @@ to zoom out). Arrow keys pan, `+`/`-` zoom, `0` resets.
   resolution with anti-aliasing off, then repaints at full quality once the view
   settles.
 - 7 palettes, adjustable color cycle and shift, auto or manual iteration limit.
-- Export the current view as PNG up to 8K.
+- Export the current view as PNG up to 32K (30720x17280), rendered in GPU
+  tiles and streamed straight to a PNG so it never touches a canvas.
 - The view is encoded in the URL hash, so any location is a shareable link.
 
 ## Python renderer

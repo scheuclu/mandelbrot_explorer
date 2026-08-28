@@ -2,7 +2,7 @@
 
 import { useId, useState } from "react";
 
-import { EXPORT_SIZES, type ExportSizeId } from "@/lib/download";
+import type { ExportProgress, ExportSizeId } from "@/lib/download";
 import { PALETTES } from "@/lib/palettes";
 import { PRESETS } from "@/lib/presets";
 import {
@@ -13,6 +13,15 @@ import {
   type Settings,
 } from "@/lib/settings";
 
+/** One entry of the export size picker, prepared by the explorer. */
+export interface ExportOption {
+  id: ExportSizeId;
+  label: string;
+  /** Set when this size cannot be produced here; `note` says why. */
+  disabled: boolean;
+  note: string | null;
+}
+
 interface ControlPanelProps {
   settings: Settings;
   onChange: (settings: Settings) => void;
@@ -22,6 +31,8 @@ interface ControlPanelProps {
   copied: boolean;
   onSavePng: () => void;
   exporting: boolean;
+  exportProgress: ExportProgress | null;
+  exportOptions: readonly ExportOption[];
   exportSize: ExportSizeId;
   onExportSizeChange: (id: ExportSizeId) => void;
   onInvalidate: () => void;
@@ -97,6 +108,8 @@ export function ControlPanel({
   copied,
   onSavePng,
   exporting,
+  exportProgress,
+  exportOptions,
   exportSize,
   onExportSizeChange,
   onInvalidate,
@@ -105,6 +118,8 @@ export function ControlPanel({
 }: ControlPanelProps) {
   const [open, setOpen] = useState(true);
   const panelId = useId();
+  const chosenExport = exportOptions.find((option) => option.id === exportSize);
+  const exportPercent = Math.round((exportProgress?.fraction ?? 0) * 100);
 
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) => {
     onChange({ ...settings, [key]: value });
@@ -307,21 +322,55 @@ export function ControlPanel({
                   onExportSizeChange(event.target.value as ExportSizeId)
                 }
               >
-                {EXPORT_SIZES.map((size) => (
-                  <option key={size.id} value={size.id}>
-                    {size.label} ({size.width}x{size.height})
+                {exportOptions.map((option) => (
+                  <option
+                    key={option.id}
+                    value={option.id}
+                    disabled={option.disabled}
+                  >
+                    {option.label}
+                    {option.disabled ? " — unavailable" : ""}
                   </option>
                 ))}
               </select>
             </Row>
+            {chosenExport?.note && !exporting && (
+              <p
+                className={`text-[11px] leading-snug ${
+                  chosenExport.disabled ? "text-amber-300/90" : "text-white/40"
+                }`}
+              >
+                {chosenExport.note}
+              </p>
+            )}
             <button
               type="button"
               onClick={onSavePng}
-              disabled={exporting}
+              disabled={exporting || chosenExport?.disabled}
               className={`${BUTTON} w-full`}
             >
-              {exporting ? "Rendering…" : "Save PNG"}
+              {exporting ? `Rendering… ${exportPercent}%` : "Save PNG"}
             </button>
+            {exporting && (
+              <div className="space-y-1">
+                <div
+                  role="progressbar"
+                  aria-label="Export progress"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={exportPercent}
+                  className="h-1 w-full overflow-hidden rounded-full bg-white/10"
+                >
+                  <div
+                    className="h-full rounded-full bg-amber-400 transition-[width] duration-150"
+                    style={{ width: `${exportPercent}%` }}
+                  />
+                </div>
+                <p className="text-[11px] text-white/40">
+                  {exportProgress?.note ?? "Working"}
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="flex gap-2 border-t border-white/10 pt-3">

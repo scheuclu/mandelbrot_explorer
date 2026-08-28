@@ -209,7 +209,7 @@ export function WelcomeDialog({ open, onClose }: WelcomeDialogProps) {
             Save PNG for the best image.
           </span>{" "}
           The canvas renders cheap while you move; the download is full
-          resolution with anti-aliasing, up to 8K.
+          resolution with anti-aliasing, up to 32K.
         </p>
 
         <div className="mt-6 flex items-center justify-between gap-4 border-t border-white/10 pt-4">

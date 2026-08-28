@@ -1,9 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { toNumber } from "@/lib/bigfloat";
-import { EXPORT_SIZES, downloadPng, type ExportSizeId } from "@/lib/download";
+import {
+  EXPORT_MIN_AA,
+  EXPORT_SIZES,
+  type ExportProgress,
+  type ExportSizeId,
+  describeExport,
+  exportBlocker,
+  exportPng,
+} from "@/lib/download";
 import { paletteIndex } from "@/lib/palettes";
 import { PRESETS } from "@/lib/presets";
 import {
@@ -65,6 +73,8 @@ export function MandelbrotExplorer() {
   // Mirrored into a ref so the keyboard handler can ignore shortcuts while the
   // dialog is up without re-registering its listeners on every toggle.
   const infoOpenRef = useRef(false);
+  // Read by the render loop, which must not fight the export for the GPU.
+  const exportingRef = useRef(false);
   /**
    * Gradient rotation accumulated by the animation, kept out of React state:
    * folding it in at 60fps would rerender the tree every frame. It is added to
@@ -76,6 +86,9 @@ export function MandelbrotExplorer() {
   const [error, setError] = useState<string | null>(null);
   const [exportSize, setExportSize] = useState<ExportSizeId>("4k");
   const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
+  // Only known once the GL context exists; until then no size is ruled out.
+  const [maxRenderSize, setMaxRenderSize] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
   const welcome = useWelcomeDialog();
   const [readout, setReadout] = useState<Readout>({
@@ -225,6 +238,7 @@ export function MandelbrotExplorer() {
       try {
         renderer = new MandelbrotRenderer(canvas);
         rendererRef.current = renderer;
+        setMaxRenderSize(renderer.maxRenderSize);
       } catch (err) {
         failed = true;
         setError(err instanceof Error ? err.message : String(err));
@@ -235,6 +249,10 @@ export function MandelbrotExplorer() {
       raf = requestAnimationFrame(renderFrame);
       if (!started) start();
       if (failed || !renderer) return;
+      // A big export owns the GPU for minutes; do not compete with it, and do
+      // not advance the gradient while nothing is being painted — dt is clamped
+      // below, so the animation resumes rather than jumping when it finishes.
+      if (exportingRef.current) return;
 
       const config = settingsRef.current;
       // Clamped: a backgrounded tab hands back a huge delta on return, which
@@ -611,6 +629,27 @@ export function MandelbrotExplorer() {
     }
   }, [liveColorOffset]);
 
+  const exportAa = Math.max(EXPORT_MIN_AA, settings.quality);
+  const exportOptions = useMemo(
+    () =>
+      EXPORT_SIZES.map((size) => {
+        // Nothing is ruled out until the GL context has reported its limits.
+        const blocked =
+          maxRenderSize === null ? null : exportBlocker(size, maxRenderSize);
+        return {
+          id: size.id,
+          label: `${size.label} (${size.width}x${size.height})`,
+          disabled: blocked !== null,
+          note:
+            blocked ??
+            (maxRenderSize === null
+              ? null
+              : describeExport(size, maxRenderSize, exportAa)),
+        };
+      }),
+    [exportAa, maxRenderSize],
+  );
+
   const savePng = useCallback(async () => {
     const renderer = rendererRef.current;
     if (!renderer || exporting) return;
@@ -618,26 +657,34 @@ export function MandelbrotExplorer() {
     const target = EXPORT_SIZES.find((s) => s.id === exportSize);
     if (!target) return;
 
+    exportingRef.current = true;
     setExporting(true);
+    setExportProgress({ fraction: 0, note: "Starting" });
     setError(null);
     // Let the button repaint before the GPU stalls on a big render.
     await new Promise((resolve) => window.setTimeout(resolve, 0));
 
     try {
       const params = resolveParams(viewRef.current, settingsRef.current);
-      params.aa = Math.max(2, settingsRef.current.quality);
+      params.aa = Math.max(EXPORT_MIN_AA, settingsRef.current.quality);
+      // Freeze the gradient where the animation currently has it, so the file
+      // matches what is on screen.
       params.colorOffset = liveColorOffset();
-      const pixels = renderer.renderToPixels(target.width, target.height, params);
-      await downloadPng(
-        pixels,
-        target.width,
-        target.height,
-        `mandelbrot-${target.id}-${settingsRef.current.palette}.png`,
-      );
+      // One reference orbit for the whole frame, so tiles stay consistent and
+      // it is uploaded to the GPU once rather than once per tile.
+      await exportPng({
+        renderer,
+        params,
+        size: target,
+        filename: `mandelbrot-${target.id}-${settingsRef.current.palette}.png`,
+        onProgress: setExportProgress,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
+      exportingRef.current = false;
       setExporting(false);
+      setExportProgress(null);
       dirtyRef.current = true;
     }
   }, [exportSize, exporting, liveColorOffset, resolveParams]);
@@ -668,6 +715,8 @@ export function MandelbrotExplorer() {
         copied={copied}
         onSavePng={savePng}
         exporting={exporting}
+        exportProgress={exportProgress}
+        exportOptions={exportOptions}
         exportSize={exportSize}
         onExportSizeChange={setExportSize}
         onInvalidate={invalidate}

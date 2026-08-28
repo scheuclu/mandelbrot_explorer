@@ -87,7 +87,7 @@ export function SiteInfo() {
               Also here: seven colour palettes with adjustable cycle and shift,
               automatic or manual iteration limits, jump-to presets for famous
               regions such as Seahorse Valley and Elephant Valley, PNG export up
-              to 8K, and a URL that always encodes the current view, so any
+              to 32K, and a URL that always encodes the current view, so any
               place you find is a link you can send to someone.
             </p>
           </section>

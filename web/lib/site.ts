@@ -42,7 +42,7 @@ export const SITE_TAGLINE =
   "Interactive deep-zoom fractal viewer, rendered live on your GPU.";
 
 export const SITE_DESCRIPTION =
-  "Explore the Mandelbrot set in real time. Every frame is computed on your GPU with WebGL2 — drag to pan, scroll to zoom far past the usual precision limits, switch palettes and export 8K PNGs. No plugins, no signup, nothing sent to a server.";
+  "Explore the Mandelbrot set in real time. Every frame is computed on your GPU with WebGL2 — drag to pan, scroll to zoom far past the usual precision limits, switch palettes and export PNGs up to 32K. No plugins, no signup, nothing sent to a server.";
 
 export const SITE_KEYWORDS = [
   "Mandelbrot set",
