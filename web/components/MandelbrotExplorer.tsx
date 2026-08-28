@@ -16,6 +16,7 @@ import type { KernelMode } from "@/lib/shader";
 import {
   DEFAULT_SETTINGS,
   type Settings,
+  wrapColorOffset,
 } from "@/lib/settings";
 import {
   DEEP_SPAN_THRESHOLD,
@@ -64,6 +65,12 @@ export function MandelbrotExplorer() {
   // Mirrored into a ref so the keyboard handler can ignore shortcuts while the
   // dialog is up without re-registering its listeners on every toggle.
   const infoOpenRef = useRef(false);
+  /**
+   * Gradient rotation accumulated by the animation, kept out of React state:
+   * folding it in at 60fps would rerender the tree every frame. It is added to
+   * settings.colorOffset at render time and merged back in when cycling stops.
+   */
+  const animPhaseRef = useRef(0);
 
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [error, setError] = useState<string | null>(null);
@@ -83,6 +90,27 @@ export function MandelbrotExplorer() {
   const invalidate = useCallback(() => {
     dirtyRef.current = true;
   }, []);
+
+  /** The offset actually on screen: the stored one plus any animated rotation. */
+  const liveColorOffset = useCallback(
+    () => wrapColorOffset(settingsRef.current.colorOffset + animPhaseRef.current),
+    [],
+  );
+
+  /**
+   * Start cycling, or stop it and fold the rotation back into colorOffset so
+   * the still frame matches the last animated one and the URL stays truthful.
+   */
+  const toggleAnimate = useCallback(() => {
+    const config = settingsRef.current;
+    const next: Settings = config.animate
+      ? { ...config, animate: false, colorOffset: liveColorOffset() }
+      : { ...config, animate: true };
+    if (config.animate) animPhaseRef.current = 0;
+    settingsRef.current = next;
+    setSettings(next);
+    dirtyRef.current = true;
+  }, [liveColorOffset]);
 
   /** Mark the view as actively changing; schedule the sharp pass afterwards. */
   const beginInteraction = useCallback(() => {
@@ -179,6 +207,7 @@ export function MandelbrotExplorer() {
     let renderer: MandelbrotRenderer | null = null;
     let raf = 0;
     let lastReadout = 0;
+    let lastFrameAt = 0;
     let started = false;
     let failed = false;
 
@@ -206,10 +235,24 @@ export function MandelbrotExplorer() {
       raf = requestAnimationFrame(renderFrame);
       if (!started) start();
       if (failed || !renderer) return;
+
+      const config = settingsRef.current;
+      // Clamped: a backgrounded tab hands back a huge delta on return, which
+      // would jump the gradient rather than resume it.
+      const dt = lastFrameAt > 0 ? Math.min((now - lastFrameAt) / 1000, 0.1) : 0;
+      lastFrameAt = now;
+
+      if (config.animate) {
+        const direction = config.animateReverse ? -1 : 1;
+        animPhaseRef.current = wrapColorOffset(
+          animPhaseRef.current + direction * config.animateSpeed * dt,
+        );
+        dirtyRef.current = true;
+      }
+
       if (!dirtyRef.current) return;
       dirtyRef.current = false;
 
-      const config = settingsRef.current;
       const view = viewRef.current;
       const live = interactingRef.current;
 
@@ -221,9 +264,20 @@ export function MandelbrotExplorer() {
 
       const params = resolveParams(view, config);
       params.aa = live ? 1 : config.quality;
+      params.colorOffset = wrapColorOffset(
+        config.colorOffset + animPhaseRef.current,
+      );
 
       try {
-        renderer.render(width, height, params);
+        // While the view is moving the geometry changes every frame, so the
+        // count cache would be rebuilt every frame and buy nothing. It only
+        // pays off once the view is still and just the colour is moving.
+        const cycling = config.animate && !live;
+        const cached =
+          cycling &&
+          (renderer.recolor(width, height, params) ||
+            renderer.renderCached(width, height, params));
+        if (!cached) renderer.render(width, height, params);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
         cancelAnimationFrame(raf);
@@ -286,13 +340,21 @@ export function MandelbrotExplorer() {
     infoOpenRef.current = welcome.open;
   }, [welcome.open]);
 
+  // The count buffer is the largest allocation the renderer makes; do not sit
+  // on it once nothing is cycling.
+  useEffect(() => {
+    if (!settings.animate) rendererRef.current?.disposeCountCache();
+  }, [settings.animate]);
+
   // --- URL hash -----------------------------------------------------------
 
   // Keep the address bar in sync once the view settles, so a reload or a
   // copied link lands in the same place.
   useEffect(() => {
     const id = window.setInterval(() => {
-      if (interactingRef.current) return;
+      // Rewriting the hash 2.5x a second with a moving offset is churn, and
+      // the offset is folded back into settings when cycling stops anyway.
+      if (interactingRef.current || settingsRef.current.animate) return;
       const hash = encodeHash({
         ...viewRef.current,
         palette: settingsRef.current.palette,
@@ -440,6 +502,16 @@ export function MandelbrotExplorer() {
         return;
       }
 
+      if (event.key === " ") {
+        // A focused button already treats Space as activation; toggling here
+        // too would fire twice.
+        if (target?.tagName !== "BUTTON") {
+          event.preventDefault();
+          toggleAnimate();
+        }
+        return;
+      }
+
       const { width, height } = size();
       const step = 0.15;
       let handled = true;
@@ -495,7 +567,7 @@ export function MandelbrotExplorer() {
       canvas.removeEventListener("dblclick", onDoubleClick);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [beginInteraction]);
+  }, [beginInteraction, toggleAnimate]);
 
   // --- actions ------------------------------------------------------------
 
@@ -527,7 +599,7 @@ export function MandelbrotExplorer() {
         ? undefined
         : settingsRef.current.maxIter,
       colorCycle: settingsRef.current.colorCycle,
-      colorOffset: settingsRef.current.colorOffset,
+      colorOffset: liveColorOffset(),
     });
     const url = `${window.location.origin}${window.location.pathname}#${hash}`;
     try {
@@ -537,7 +609,7 @@ export function MandelbrotExplorer() {
     } catch {
       setError("Could not write to the clipboard.");
     }
-  }, []);
+  }, [liveColorOffset]);
 
   const savePng = useCallback(async () => {
     const renderer = rendererRef.current;
@@ -554,6 +626,7 @@ export function MandelbrotExplorer() {
     try {
       const params = resolveParams(viewRef.current, settingsRef.current);
       params.aa = Math.max(2, settingsRef.current.quality);
+      params.colorOffset = liveColorOffset();
       const pixels = renderer.renderToPixels(target.width, target.height, params);
       await downloadPng(
         pixels,
@@ -567,7 +640,7 @@ export function MandelbrotExplorer() {
       setExporting(false);
       dirtyRef.current = true;
     }
-  }, [exportSize, exporting, resolveParams]);
+  }, [exportSize, exporting, liveColorOffset, resolveParams]);
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-black">
@@ -599,6 +672,7 @@ export function MandelbrotExplorer() {
         onExportSizeChange={setExportSize}
         onInvalidate={invalidate}
         onShowInfo={welcome.show}
+        onToggleAnimate={toggleAnimate}
       />
 
       <StatusBar readout={readout} />
