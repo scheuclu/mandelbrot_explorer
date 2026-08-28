@@ -8,11 +8,12 @@
  */
 
 /**
- * Deployed production origin. Taken from the GitHub repository's homepage
- * (`scheuclu/mandelbrot_explorer`); there is no `vercel.json` pinning a domain.
- * Override it with `NEXT_PUBLIC_SITE_URL` once a custom domain exists.
+ * Deployed production origin. Only a fallback: on Vercel the build injects
+ * VERCEL_PROJECT_PRODUCTION_URL, which is what actually resolves in
+ * production. Kept in sync with the custom domain so local builds and any
+ * non-Vercel host emit the same canonical URL.
  */
-const FALLBACK_SITE_URL = "https://mandelbrot-eosin.vercel.app";
+const FALLBACK_SITE_URL = "https://mandelbrot.lol";
 
 function resolveSiteUrl(): string {
   const explicit = process.env.NEXT_PUBLIC_SITE_URL;
@@ -26,10 +27,16 @@ function resolveSiteUrl(): string {
 
 export const SITE_URL = resolveSiteUrl();
 
-export const SITE_NAME = "Mandelbrot Explorer";
+export const SITE_NAME = "mandelbrot.lol";
+
+/**
+ * What the site was called before the domain became the brand. Kept as the
+ * schema.org alternateName so the entity stays findable under both.
+ */
+export const SITE_ALT_NAME = "Mandelbrot Explorer";
 
 export const SITE_TITLE =
-  "Mandelbrot Explorer — Interactive Fractal Deep Zoom in Your Browser";
+  "mandelbrot.lol — Interactive Fractal Deep Zoom in Your Browser";
 
 export const SITE_TAGLINE =
   "Interactive deep-zoom fractal viewer, rendered live on your GPU.";

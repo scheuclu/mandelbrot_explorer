@@ -2,9 +2,9 @@ import { MandelbrotExplorer } from "@/components/MandelbrotExplorer";
 import { SiteInfo } from "@/components/SiteInfo";
 import {
   AUTHOR,
+  SITE_ALT_NAME,
   SITE_DESCRIPTION,
   SITE_NAME,
-  SITE_TITLE,
   SITE_URL,
 } from "@/lib/site";
 
@@ -13,7 +13,7 @@ const jsonLd = {
   "@type": "WebApplication",
   "@id": `${SITE_URL}/#webapp`,
   name: SITE_NAME,
-  alternateName: SITE_TITLE,
+  alternateName: SITE_ALT_NAME,
   url: SITE_URL,
   description: SITE_DESCRIPTION,
   applicationCategory: "EducationalApplication",

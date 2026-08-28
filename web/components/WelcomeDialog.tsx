@@ -9,6 +9,8 @@ import {
   useSyncExternalStore,
 } from "react";
 
+import { SITE_NAME } from "@/lib/site";
+
 /**
  * Bump the version suffix to show the dialog again to everyone after a
  * meaningful content change.
@@ -171,7 +173,7 @@ export function WelcomeDialog({ open, onClose }: WelcomeDialogProps) {
         </button>
 
         <h2 id={titleId} className="pr-8 text-lg font-semibold text-white/90">
-          Mandelbrot Explorer
+          {SITE_NAME}
         </h2>
 
         <p
