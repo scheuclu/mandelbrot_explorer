@@ -1,1 +1,1 @@
-Mandelbrot Explorer — a deep zoom into Seahorse Valley of the Mandelbrot set, rendered in the browser on the GPU.
+mandelbrot.lol — a deep zoom into Seahorse Valley of the Mandelbrot set, rendered in the browser on the GPU.

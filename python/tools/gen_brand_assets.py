@@ -22,6 +22,10 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parents[2]
 APP = ROOT / "web" / "app"
 
+# Keep in sync with SITE_NAME in web/lib/site.ts. Baked into the social card
+# as pixels, so a rename there means re-running this script.
+SITE_NAME = "mandelbrot.lol"
+
 # Escape radius. Large enough that the smooth-iteration term below is accurate.
 BAILOUT = 1e4
 LOG2 = math.log(2.0)
@@ -149,6 +153,15 @@ def load_font(size: int, bold: bool) -> ImageFont.FreeTypeFont:
     )
 
 
+def fit_font(text: str, max_width: float, max_size: int, min_size: int = 44):
+    """Largest bold size at which `text` still fits `max_width`."""
+    for size in range(max_size, min_size - 1, -2):
+        font = load_font(size, bold=True)
+        if font.getlength(text) <= max_width:
+            return font
+    return load_font(min_size, bold=True)
+
+
 def draw_tracked(
     draw: ImageDraw.ImageDraw, xy, text: str, font, fill, tracking: float = 0.0
 ) -> None:
@@ -193,19 +206,24 @@ def render_social(w: int = 1200, h: int = 630) -> Image.Image:
     draw = ImageDraw.Draw(img)
     draw_tracked(
         draw,
-        (80, 132),
+        (80, 175),
         "WEBGL2 · REAL TIME · NO SERVER",
         load_font(21, bold=True),
         (255, 176, 32),
         tracking=3.2,
     )
-    draw.text((78, 186), "Mandelbrot", font=load_font(86, bold=True), fill=(255, 255, 255))
-    draw.text((78, 286), "Explorer", font=load_font(86, bold=True), fill=(255, 255, 255))
-    body = load_font(28, bold=False)
-    draw.text((80, 410), "Pan, zoom and explore the set in real", font=body, fill=(203, 211, 227))
-    draw.text((80, 448), "time, rendered entirely on your GPU.", font=body, fill=(203, 211, 227))
+    # Sized to the scrim's fully-opaque plateau, not to the canvas.
     draw.text(
-        (80, 512),
+        (78, 219),
+        SITE_NAME,
+        font=fit_font(SITE_NAME, max_width=590, max_size=92),
+        fill=(255, 255, 255),
+    )
+    body = load_font(28, bold=False)
+    draw.text((80, 369), "Pan, zoom and explore the set in real", font=body, fill=(203, 211, 227))
+    draw.text((80, 407), "time, rendered entirely on your GPU.", font=body, fill=(203, 211, 227))
+    draw.text(
+        (80, 469),
         "No precision ceiling — zoom past 10²⁴×.",
         font=load_font(23, bold=False),
         fill=(142, 154, 180),
@@ -243,8 +261,8 @@ def main(preview: Path | None = None) -> None:
     social.save(APP / "opengraph-image.png", optimize=True)
     social.save(APP / "twitter-image.png", optimize=True)
     alt = (
-        "Mandelbrot Explorer — a deep zoom into Seahorse Valley of the "
-        "Mandelbrot set, rendered in the browser on the GPU."
+        f"{SITE_NAME} — a deep zoom into Seahorse Valley of the Mandelbrot "
+        "set, rendered in the browser on the GPU."
     )
     # No trailing newline: Next inlines the file verbatim into the
     # og:image:alt attribute, newline and all.

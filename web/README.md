@@ -1,4 +1,4 @@
-# Mandelbrot Explorer — web
+# mandelbrot.lol — web
 
 Real-time Mandelbrot explorer. Next.js shell, all rendering in a WebGL2 fragment
 shader on the client.
