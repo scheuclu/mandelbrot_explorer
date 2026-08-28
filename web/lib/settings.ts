@@ -11,6 +11,11 @@ export interface Settings {
   colorCycle: number;
   /** Rotates the gradient, in sweeps. */
   colorOffset: number;
+  /** Rotate the gradient continuously. */
+  animate: boolean;
+  /** Gradient sweeps per second while animating. */
+  animateSpeed: number;
+  animateReverse: boolean;
   /** Supersampling grid per axis once the view settles. */
   quality: number;
   /** Fraction of full resolution rendered while panning or zooming. */
@@ -24,6 +29,9 @@ export const DEFAULT_SETTINGS: Settings = {
   maxIter: 500,
   colorCycle: 96,
   colorOffset: 0,
+  animate: false,
+  animateSpeed: 0.2,
+  animateReverse: false,
   quality: 2,
   liveScale: 0.5,
   precision: "auto",
@@ -47,3 +55,14 @@ export const PRECISION_OPTIONS: { value: PrecisionMode; label: string }[] = [
   { value: "double", label: "Double (to 1e12x)" },
   { value: "perturb", label: "Perturbation (unlimited)" },
 ];
+
+export const ANIMATE_SPEED = { min: 0.02, max: 1, step: 0.02 };
+
+/**
+ * Fold an offset back into one period. The sawtooth ramp repeats every 1 and
+ * the ping-pong ramp every 2, so 2 is a whole number of cycles for both — and
+ * wrapping keeps the accumulated float from drifting over a long run.
+ */
+export function wrapColorOffset(offset: number): number {
+  return ((offset % 2) + 2) % 2;
+}

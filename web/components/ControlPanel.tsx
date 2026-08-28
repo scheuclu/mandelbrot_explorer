@@ -6,6 +6,7 @@ import { EXPORT_SIZES, type ExportSizeId } from "@/lib/download";
 import { PALETTES } from "@/lib/palettes";
 import { PRESETS } from "@/lib/presets";
 import {
+  ANIMATE_SPEED,
   LIVE_SCALE_OPTIONS,
   PRECISION_OPTIONS,
   QUALITY_OPTIONS,
@@ -25,6 +26,8 @@ interface ControlPanelProps {
   onExportSizeChange: (id: ExportSizeId) => void;
   onInvalidate: () => void;
   onShowInfo: () => void;
+  /** Owned by the explorer: stopping has to fold the rotation back in. */
+  onToggleAnimate: () => void;
 }
 
 const FIELD =
@@ -98,6 +101,7 @@ export function ControlPanel({
   onExportSizeChange,
   onInvalidate,
   onShowInfo,
+  onToggleAnimate,
 }: ControlPanelProps) {
   const [open, setOpen] = useState(true);
   const panelId = useId();
@@ -193,6 +197,39 @@ export function ControlPanel({
             display={settings.colorOffset.toFixed(2)}
             onChange={(value) => update("colorOffset", value)}
           />
+
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onToggleAnimate}
+                aria-pressed={settings.animate}
+                className={`${BUTTON} flex-1`}
+              >
+                {settings.animate ? "Pause cycling" : "Cycle colors"}
+              </button>
+              <button
+                type="button"
+                onClick={() => update("animateReverse", !settings.animateReverse)}
+                aria-pressed={settings.animateReverse}
+                aria-label="Reverse cycling direction"
+                title="Reverse cycling direction"
+                className={BUTTON}
+              >
+                {settings.animateReverse ? "Rev" : "Fwd"}
+              </button>
+            </div>
+
+            <Slider
+              label="Cycle speed"
+              value={settings.animateSpeed}
+              min={ANIMATE_SPEED.min}
+              max={ANIMATE_SPEED.max}
+              step={ANIMATE_SPEED.step}
+              display={`${settings.animateSpeed.toFixed(2)}/s`}
+              onChange={(value) => update("animateSpeed", value)}
+            />
+          </div>
 
           <div className="space-y-2 border-t border-white/10 pt-3">
             <label className="flex items-center justify-between text-xs text-white/70">
@@ -303,7 +340,7 @@ export function ControlPanel({
           <p className="border-t border-white/10 pt-3 text-[11px] leading-relaxed text-white/40">
             Drag to pan, scroll or pinch to zoom, double-click to zoom in
             (shift to zoom out). Arrow keys pan, <kbd>+</kbd>/<kbd>-</kbd> zoom,
-            <kbd> 0</kbd> resets.
+            <kbd> 0</kbd> resets, <kbd>Space</kbd> cycles colors.
           </p>
         </div>
       )}

@@ -37,9 +37,16 @@ npm install
 npm run dev     # http://localhost:3000
 npm run build
 npm run lint
+npm run check   # GLSL + sample-parity checks (see below)
 ```
 
-There are no automated tests in either project.
+There is no test suite. `npm run check` is the closest thing: two standalone
+scripts under `web/scripts/` that guard the two failure modes a build cannot
+see. `check:shaders` generates every GLSL variant and rejects identifiers that
+collide with GLSL ES 3.00 reserved words — `ivec2 sample` compiled fine in
+TypeScript and broke colour cycling on the GPU. `check:parity` proves the count
+shader samples exactly where the single-pass shader does. Run both after
+touching `lib/shader.ts`.
 
 ## Architecture
 
@@ -81,6 +88,12 @@ The render loop lives entirely on the GPU. Nothing is recomputed in JS per pixel
   the upload when the orbit is unchanged. `renderToPixels()` renders offscreen to
   a renderbuffer for PNG export without disturbing the canvas.
 
+  It also keeps an optional **count cache** for colour cycling: `renderCached()`
+  writes per-sample escape counts into an R32F texture and colours them, and
+  `recolor()` redraws from that texture when only the palette changed. Both
+  return false when the cache cannot be used — no `EXT_color_buffer_float`, or
+  past the 32M-sample cap — and the caller falls back to `render()`.
+
 - **`lib/view.ts`** — viewport math (`zoomAt`, `panByPixels`), the precision
   threshold constants, and URL-hash encoding. The center is a `BigFloat`; spans
   and pixel offsets stay plain numbers.
@@ -99,6 +112,11 @@ The render loop lives entirely on the GPU. Nothing is recomputed in JS per pixel
   assumed — see the validation notes in `web/README.md`.
 - The view center must stay a `BigFloat` end to end. Rounding it to a double
   anywhere caps zoom at ~1e15x no matter what the shader does.
+- The count shader and the single-pass shader must evaluate the **same uv
+  expression**, not merely an algebraically equivalent one. Simplifying it
+  breaks float32 agreement on ~8% of samples, which shows up as a shimmer when
+  colour cycling starts or stops. `buildCountShader()` reconstructs the pixel
+  index specifically to avoid this.
 
 When changing any of this, the cheap way to check correctness is to compare
 against a CPU reference in plain JS rather than eyeballing renders — and always

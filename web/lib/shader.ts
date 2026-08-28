@@ -250,30 +250,38 @@ export interface ShaderVariant {
   aa: number;
 }
 
-export function buildFragmentShader({ kernel, aa }: ShaderVariant): string {
-  const deep = kernel !== "single";
-  const samplePos = `(gl_FragCoord.xy - 0.5 + (vec2(float(sx), float(sy)) + 0.5) / float(AA)) / uResolution`;
+/**
+ * Position of AA sample (sx, sy) within the pixel at gl_FragCoord, in [0, 1].
+ * gl_FragCoord is the pixel centre (px + 0.5), so this works out to
+ * (px + (s + 0.5) / AA) / resolution.
+ */
+const SAMPLE_POS = `(gl_FragCoord.xy - 0.5 + (vec2(float(sx), float(sy)) + 0.5) / float(AA)) / uResolution`;
 
-  let sampleColor: string;
+/** GLSL that turns a `vec2 uv` into `float sn`, the smooth escape count. */
+function sampleExpr(kernel: KernelMode): string {
   if (kernel === "perturb") {
     // The center never reaches the shader: it is baked into the reference
     // orbit. Only the offset from that orbit's center matters, so the pixel
     // offset is computed in df64 and added to the (small) center difference.
-    sampleColor = `
+    return `
       vec2 fx = dfMul(vec2(uv.x - 0.5, 0.0), uSpanX);
       vec2 fy = dfMul(vec2(uv.y - 0.5, 0.0), uSpanY);
       float sn = escape(dfAdd(uDeltaC0X, fx), dfAdd(uDeltaC0Y, fy));`;
-  } else if (kernel === "double") {
-    sampleColor = `
+  }
+  if (kernel === "double") {
+    return `
       vec2 off = (uv - 0.5) * uSpan;
       float sn = escape(dfAdd(uCenterX, vec2(off.x, 0.0)),
                         dfAdd(uCenterY, vec2(off.y, 0.0)));`;
-  } else {
-    sampleColor = `
+  }
+  return `
       vec2 off = (uv - 0.5) * uSpan;
       float sn = escape(vec2(uCenterX.x + off.x, uCenterY.x + off.y));`;
-  }
+}
 
+/** Uniforms, helpers and the escape kernel — everything above `main`. */
+function preamble(kernel: KernelMode, aa: number, withPalette: boolean): string {
+  const deep = kernel !== "single";
   return `#version 300 es
 precision highp float;
 precision highp int;
@@ -304,16 +312,90 @@ float smoothCount(int i, float m2) {
   return float(i) + 1.0 - log2(0.5 * log(m2) / LN2);
 }
 
-${PALETTE_GLSL}
+${withPalette ? PALETTE_GLSL : ""}
 ${deep ? DF64_GLSL : ""}
 ${kernel === "perturb" ? ESCAPE_PERTURB : kernel === "double" ? ESCAPE_DEEP : ESCAPE_SINGLE}
+`;
+}
 
+/** Escape-time and colouring in one pass, straight to the target. */
+export function buildFragmentShader({ kernel, aa }: ShaderVariant): string {
+  return `${preamble(kernel, aa, true)}
 void main() {
   vec3 acc = vec3(0.0);
   for (int sy = 0; sy < AA; sy++) {
     for (int sx = 0; sx < AA; sx++) {
-      vec2 uv = ${samplePos};
-      ${sampleColor}
+      vec2 uv = ${SAMPLE_POS};
+      ${sampleExpr(kernel)}
+      acc += sn < 0.0 ? uInteriorColor : shade(sn);
+    }
+  }
+  fragColor = vec4(acc / float(AA * AA), 1.0);
+}
+`;
+}
+
+/**
+ * Escape counts only, one sample per fragment, written to an R32F target.
+ *
+ * Drawn into a buffer AA times the canvas size, so fragment q corresponds to
+ * sample (q mod AA) of pixel (q div AA). `uResolution` stays the *canvas*
+ * resolution, and the pixel index is recovered with integer maths so the uv
+ * expression below is character-for-character the one the single-pass shader
+ * evaluates.
+ *
+ * That matters more than it looks. The algebraically equivalent shortcut
+ * `gl_FragCoord.xy / (uResolution * AA)` rounds differently in float32: it
+ * disagrees with the single-pass path on ~8% of samples by one ULP. Harmless
+ * on its own, but it would make toggling the animation shimmer along the
+ * boundary. Reconstructing the index keeps the two paths bit-identical.
+ */
+export function buildCountShader(kernel: KernelMode, aa: number): string {
+  return `${preamble(kernel, aa, false)}
+void main() {
+  // gl_FragCoord is the sample centre, so truncating gives the sample index.
+  ivec2 q = ivec2(gl_FragCoord.xy);
+  ivec2 pixel = q / AA;
+  // Not "sample": that is a reserved word in GLSL ES 3.00 and fails to compile.
+  ivec2 sub = q - pixel * AA;
+  int sx = sub.x;
+  int sy = sub.y;
+  vec2 uv = (vec2(pixel) + (vec2(float(sx), float(sy)) + 0.5) / float(AA)) / uResolution;
+  ${sampleExpr(kernel)}
+  fragColor = vec4(sn, 0.0, 0.0, 1.0);
+}
+`;
+}
+
+/**
+ * Colour a cached count buffer. This is the only pass that reruns while the
+ * gradient animates, which is what keeps cycling free of the escape-time cost.
+ */
+export function buildColorizeShader(aa: number): string {
+  return `#version 300 es
+precision highp float;
+precision highp int;
+
+out vec4 fragColor;
+
+uniform sampler2D uCounts;
+uniform int  uPalette;
+uniform float uColorCycle;
+uniform float uColorOffset;
+uniform vec3 uInteriorColor;
+
+const int AA = ${aa};
+
+${PALETTE_GLSL}
+
+void main() {
+  // Integer texel maths, so the AA block is picked out exactly with no
+  // filtering or half-texel drift.
+  ivec2 base = ivec2(gl_FragCoord.xy) * AA;
+  vec3 acc = vec3(0.0);
+  for (int sy = 0; sy < AA; sy++) {
+    for (int sx = 0; sx < AA; sx++) {
+      float sn = texelFetch(uCounts, base + ivec2(sx, sy), 0).r;
       acc += sn < 0.0 ? uInteriorColor : shade(sn);
     }
   }
