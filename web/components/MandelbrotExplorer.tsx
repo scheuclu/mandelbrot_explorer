@@ -661,6 +661,9 @@ export function MandelbrotExplorer() {
     setExporting(true);
     setExportProgress({ fraction: 0, note: "Starting" });
     setError(null);
+    // Hand back the colour-cycling count cache (up to ~128MB of VRAM) before a
+    // 32K export needs it. The next live frame just rebuilds it.
+    renderer.disposeCountCache();
     // Let the button repaint before the GPU stalls on a big render.
     await new Promise((resolve) => window.setTimeout(resolve, 0));
 
