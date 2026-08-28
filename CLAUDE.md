@@ -85,6 +85,15 @@ The render loop lives entirely on the GPU. Nothing is recomputed in JS per pixel
   threshold constants, and URL-hash encoding. The center is a `BigFloat`; spans
   and pixel offsets stay plain numbers.
 
+- **`lib/download.ts` / `lib/png.ts`** — PNG export, up to 32K (531 Mpx). Two
+  hard limits shape this: the GPU will not render a frame wider than
+  `MAX_RENDERBUFFER_SIZE` (usually 16384), and a canvas caps *total* area at
+  268 Mpx in Chrome and less in Safari. So `planExport()` cuts the frame into
+  tiles, `tileParams()` re-aims the view at each one (exactly — no shader change
+  and no seams), and `png.ts` writes the PNG byte stream itself through
+  `CompressionStream("deflate")` rather than going near a canvas. Sizes that
+  cannot work here are disabled in the picker with the reason shown.
+
 - **`components/MandelbrotExplorer.tsx`** — owns the rAF render loop. The view
   lives in a **ref**, not React state, so panning never triggers a React render;
   a `dirty` flag decides whether a frame is drawn. While the pointer is moving

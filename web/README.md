@@ -76,6 +76,51 @@ pixels where two accurate algorithms legitimately differ in the last iteration.
 The `double` kernel itself matched a float64 CPU reference on 99.4% of pixels,
 median difference 0.
 
+## Exporting
+
+Export sizes go up to 32K (30720x17280 = 531 Mpx). At that size neither of the
+obvious mechanisms works:
+
+- **The GPU** reports `MAX_RENDERBUFFER_SIZE` of 16384 on most desktop parts, so
+  a 30720-wide frame cannot be rendered in one pass. `planExport()` cuts the
+  frame into tiles no wider than that limit and no more than 64 M shader samples
+  per draw (16 Mpx at the AA=2 export floor, a quarter of that at AA=3) — the
+  second cap has nothing to do with correctness and everything to do with GPU
+  watchdogs, which kill a context that spends a few seconds inside one draw
+  call. Every tile is re-aimed with `tileParams()`, which shifts the view centre
+  (or, under perturbation, `deltaC`) onto the tile and scales the span by the
+  tile's share of the frame. The algebra cancels exactly, so a tile pixel gets
+  the same complex coordinate a full-frame render would give it; measured
+  worst-case drift across every plan is 3e-12 of a pixel.
+- **The canvas** caps *total area*, at 268 Mpx (16384²) in Chrome and lower in
+  Safari, so a 531 Mpx image can never be drawn on one — and `putImageData`
+  would want the whole 2.1 GB of RGBA at once regardless. `lib/png.ts` therefore
+  writes the PNG byte stream itself, pushing bands through
+  `CompressionStream("deflate")` (which emits exactly the zlib stream an IDAT
+  needs) and folding the output into Blob parts as it appears.
+
+Scanlines use filter type 0 (None) with colour type 2 (RGB). Measured on three
+real renders, that is within 4.5% of the best of Sub / Up / Paeth /
+adaptive-minimum-sum and 2–3x cheaper: deflate's LZ77 already finds the
+horizontal runs Sub would, and filtering destroys the byte-level repeats it
+feeds on. Output runs 0.20–1.35 bytes per pixel, so a 32K frame is 105–720 MB.
+
+**Validation.** The encoder was checked against Pillow: pixel-exact at 1x1, 7x5,
+1920x1080 and 1920x17280 (the last one crossing the multi-IDAT and Blob-folding
+paths), with 254,873 distinct RGB values in the 1920x1080 reference — a uniform
+region would have made any two implementations agree. Tiled assembly was driven
+with a fake GPU at `MAX_RENDERBUFFER_SIZE` of 16384, 900, 500 and 301: identical
+output bytes in all four cases, every pixel covered exactly once. A full-scale
+30720x17280 dry run produced a valid 702 MB PNG — chunk CRCs, zlib stream and
+all 17,280 scanlines verified independently — in 18.7 s of encoding, peaking at
+1.3 GB of process memory.
+
+Sizes that cannot work are disabled in the picker with the reason shown, before
+any rendering starts: no Compression Streams API, or a `navigator.deviceMemory`
+too small for the estimated peak. The download link is only created after the
+last byte is encoded, so a failure at any point leaves no file rather than a
+truncated one.
+
 **Performance.** The view lives in a ref, not React state, so panning never
 triggers a React render. A dirty flag gates the rAF loop. While the pointer is
 moving the canvas renders at a fraction of full resolution with anti-aliasing
@@ -100,5 +145,6 @@ lib/
   palettes.ts           palette metadata
   presets.ts            interesting locations
   settings.ts           settings model and defaults
-  download.ts           PNG export
+  download.ts           export sizes, tiling plan, export orchestration
+  png.ts                streaming PNG encoder (no canvas, no size ceiling)
 ```

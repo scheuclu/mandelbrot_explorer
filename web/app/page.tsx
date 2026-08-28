@@ -46,7 +46,7 @@ const jsonLd = {
     "Real-time GPU rendering of the Mandelbrot set with WebGL2",
     "Deep zoom without a precision ceiling via perturbation theory",
     "Seven colour palettes with adjustable cycle and shift",
-    "PNG export up to 8K",
+    "PNG export up to 32K, rendered in tiles and streamed to disk",
     "Shareable URLs that encode the current view",
   ],
 };
