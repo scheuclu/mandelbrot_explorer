@@ -1,5 +1,11 @@
 import { type ReferenceOrbit, orbitTextureSize } from "./reference";
-import { type KernelMode, VERTEX_SHADER, buildFragmentShader } from "./shader";
+import {
+  type KernelMode,
+  VERTEX_SHADER,
+  buildColorizeShader,
+  buildCountShader,
+  buildFragmentShader,
+} from "./shader";
 
 export interface RenderParams {
   /** Only used by the single/double kernels; perturbation bakes it into the orbit. */
@@ -42,7 +48,16 @@ const UNIFORM_NAMES = [
   "uOrbit",
   "uOrbitSize",
   "uOrbitLength",
+  "uCounts",
 ] as const;
+
+/**
+ * Ceiling on the count cache, in samples. Each is one float32, so 32M samples
+ * is ~128MB of VRAM — already generous, and a 4K canvas at AA 2 sits right on
+ * it. Past this the cache is declined and the single-pass path is used, which
+ * is slower to animate but allocates nothing.
+ */
+const MAX_COUNT_SAMPLES = 32_000_000;
 
 /**
  * Split a JS double into two floats whose sum reproduces ~48 mantissa bits.
@@ -78,6 +93,19 @@ export class MandelbrotRenderer {
   private programs = new Map<string, ProgramInfo>();
   private disposed = false;
 
+  /** R32F render targets need this; a few older drivers lack it. */
+  private colorBufferFloat: boolean;
+  private readonly maxTextureSize: number;
+
+  // Cached escape counts, at AA x canvas resolution. Only allocated once
+  // something actually asks to recolour without recomputing.
+  private countTexture: WebGLTexture | null = null;
+  private countFramebuffer: WebGLFramebuffer | null = null;
+  private countDims: [number, number] = [0, 0];
+  /** Geometry the cached counts belong to; null means nothing is cached. */
+  private cacheKey: string | null = null;
+  private cacheOrbit: ReferenceOrbit | null = null;
+
   private orbitTexture: WebGLTexture | null = null;
   /** Identity of the orbit currently on the GPU, to skip redundant uploads. */
   private uploadedOrbit: ReferenceOrbit | null = null;
@@ -99,6 +127,13 @@ export class MandelbrotRenderer {
     this.gl = gl;
     this.vao = gl.createVertexArray();
     this.vertexShader = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
+    this.colorBufferFloat = gl.getExtension("EXT_color_buffer_float") !== null;
+    this.maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
+  }
+
+  /** Whether recolouring without recomputing escape counts is possible here. */
+  get supportsCountCache(): boolean {
+    return this.colorBufferFloat;
   }
 
   /** Largest offscreen render this GPU will accept, in pixels per axis. */
@@ -107,16 +142,27 @@ export class MandelbrotRenderer {
   }
 
   private getProgram(kernel: KernelMode, aa: number): ProgramInfo {
-    const key = `${kernel}${aa}`;
+    return this.buildProgram(`shade:${kernel}:${aa}`, () =>
+      buildFragmentShader({ kernel, aa }),
+    );
+  }
+
+  private getCountProgram(kernel: KernelMode, aa: number): ProgramInfo {
+    return this.buildProgram(`count:${kernel}:${aa}`, () =>
+      buildCountShader(kernel, aa),
+    );
+  }
+
+  private getColorizeProgram(aa: number): ProgramInfo {
+    return this.buildProgram(`color:${aa}`, () => buildColorizeShader(aa));
+  }
+
+  private buildProgram(key: string, source: () => string): ProgramInfo {
     const cached = this.programs.get(key);
     if (cached) return cached;
 
     const gl = this.gl;
-    const fragment = compile(
-      gl,
-      gl.FRAGMENT_SHADER,
-      buildFragmentShader({ kernel, aa }),
-    );
+    const fragment = compile(gl, gl.FRAGMENT_SHADER, source());
     const program = gl.createProgram();
     if (!program) throw new Error("Failed to allocate program");
     gl.attachShader(program, this.vertexShader);
@@ -169,16 +215,22 @@ export class MandelbrotRenderer {
     return this.orbitDims;
   }
 
-  private draw(width: number, height: number, params: RenderParams): void {
+  /** Perturbation silently degrades to the double kernel without an orbit. */
+  private static kernelFor(params: RenderParams): KernelMode {
+    return params.kernel === "perturb" && !params.orbit
+      ? "double"
+      : params.kernel;
+  }
+
+  /** Everything the escape-time kernel needs. Shared by both count paths. */
+  private setGeometryUniforms(
+    uniforms: ProgramInfo["uniforms"],
+    width: number,
+    height: number,
+    params: RenderParams,
+    kernel: KernelMode,
+  ): void {
     const gl = this.gl;
-    const kernel =
-      params.kernel === "perturb" && !params.orbit ? "double" : params.kernel;
-    const { program, uniforms } = this.getProgram(kernel, params.aa);
-
-    gl.useProgram(program);
-    gl.bindVertexArray(this.vao);
-    gl.viewport(0, 0, width, height);
-
     const [cxHi, cxLo] = splitDouble(params.centerX);
     const [cyHi, cyLo] = splitDouble(params.centerY);
     const spanX = params.spanY * (width / height);
@@ -200,13 +252,221 @@ export class MandelbrotRenderer {
       gl.uniform2i(uniforms.uOrbitSize, ow, oh);
       gl.uniform1i(uniforms.uOrbitLength, params.orbit.length);
     }
+  }
+
+  private setColorUniforms(
+    uniforms: ProgramInfo["uniforms"],
+    params: RenderParams,
+  ): void {
+    const gl = this.gl;
     gl.uniform1i(uniforms.uPalette, params.palette);
     gl.uniform1f(uniforms.uColorCycle, Math.max(1, params.colorCycle));
     gl.uniform1f(uniforms.uColorOffset, params.colorOffset);
     gl.uniform3f(uniforms.uInteriorColor, ...params.interior);
+  }
+
+  private draw(width: number, height: number, params: RenderParams): void {
+    const gl = this.gl;
+    const kernel = MandelbrotRenderer.kernelFor(params);
+    const { program, uniforms } = this.getProgram(kernel, params.aa);
+
+    gl.useProgram(program);
+    gl.bindVertexArray(this.vao);
+    gl.viewport(0, 0, width, height);
+    this.setGeometryUniforms(uniforms, width, height, params, kernel);
+    this.setColorUniforms(uniforms, params);
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
+  }
+
+  /**
+   * Escape counts into the R32F cache, one sample per fragment.
+   * `width`/`height` are the *canvas* size; the viewport is AA times that, and
+   * the shader recovers the pixel index from gl_FragCoord.
+   */
+  private drawCounts(width: number, height: number, params: RenderParams): void {
+    const gl = this.gl;
+    const kernel = MandelbrotRenderer.kernelFor(params);
+    const aa = Math.max(1, Math.round(params.aa));
+    const { program, uniforms } = this.getCountProgram(kernel, aa);
+
+    gl.useProgram(program);
+    gl.bindVertexArray(this.vao);
+    gl.viewport(0, 0, width * aa, height * aa);
+    // Canvas resolution, not sample resolution: the uv expression in the count
+    // shader must match the single-pass one exactly.
+    this.setGeometryUniforms(uniforms, width, height, params, kernel);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+  }
+
+  /** Cached counts -> pixels. The only pass that reruns while cycling. */
+  private drawColorize(
+    width: number,
+    height: number,
+    params: RenderParams,
+  ): void {
+    const gl = this.gl;
+    const { program, uniforms } = this.getColorizeProgram(params.aa);
+
+    gl.useProgram(program);
+    gl.bindVertexArray(this.vao);
+    gl.viewport(0, 0, width, height);
+    // Unit 1: unit 0 belongs to the orbit texture and must survive.
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.countTexture);
+    gl.uniform1i(uniforms.uCounts, 1);
+    this.setColorUniforms(uniforms, params);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+  }
+
+  /** Identity of the geometry a cached count buffer was produced from. */
+  private geometryKey(
+    width: number,
+    height: number,
+    params: RenderParams,
+  ): string {
+    const [dx, dy] = params.deltaC ?? [0, 0];
+    return [
+      width,
+      height,
+      params.aa,
+      MandelbrotRenderer.kernelFor(params),
+      params.maxIter,
+      params.centerX,
+      params.centerY,
+      params.spanY,
+      dx,
+      dy,
+    ].join("|");
+  }
+
+  private ensureCountTarget(width: number, height: number): boolean {
+    const gl = this.gl;
+    if (
+      this.countTexture &&
+      this.countDims[0] === width &&
+      this.countDims[1] === height
+    ) {
+      return true;
+    }
+    this.disposeCountCache();
+
+    const texture = gl.createTexture();
+    const framebuffer = gl.createFramebuffer();
+    if (!texture || !framebuffer) {
+      if (texture) gl.deleteTexture(texture);
+      if (framebuffer) gl.deleteFramebuffer(framebuffer);
+      return false;
+    }
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(
+      gl.TEXTURE_2D, 0, gl.R32F, width, height, 0, gl.RED, gl.FLOAT, null,
+    );
+    // texelFetch only, so filtering would never kick in — but NEAREST also
+    // keeps R32F sampleable on drivers that refuse to filter float textures.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0,
+    );
+    const complete =
+      gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    if (!complete) {
+      gl.deleteTexture(texture);
+      gl.deleteFramebuffer(framebuffer);
+      // Some drivers advertise the extension but reject R32F as a colour
+      // attachment. Stop asking rather than retrying every frame.
+      this.colorBufferFloat = false;
+      return false;
+    }
+
+    this.countTexture = texture;
+    this.countFramebuffer = framebuffer;
+    this.countDims = [width, height];
+    return true;
+  }
+
+  /**
+   * Compute escape counts into the cache, then colour them onto the canvas.
+   * Returns false when the cache is unavailable or too large, in which case
+   * the caller should fall back to `render`.
+   */
+  renderCached(width: number, height: number, params: RenderParams): boolean {
+    if (this.disposed || !this.colorBufferFloat || width < 1 || height < 1) {
+      return false;
+    }
+    const gl = this.gl;
+    const aa = Math.max(1, Math.round(params.aa));
+    const sampleWidth = width * aa;
+    const sampleHeight = height * aa;
+    if (
+      sampleWidth > this.maxTextureSize ||
+      sampleHeight > this.maxTextureSize ||
+      sampleWidth * sampleHeight > MAX_COUNT_SAMPLES
+    ) {
+      return false;
+    }
+    if (!this.ensureCountTarget(sampleWidth, sampleHeight)) return false;
+
+    const canvas = gl.canvas as HTMLCanvasElement;
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.countFramebuffer);
+    this.drawCounts(width, height, params);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    this.cacheKey = this.geometryKey(width, height, params);
+    this.cacheOrbit = params.orbit ?? null;
+    this.drawColorize(width, height, params);
+    return true;
+  }
+
+  /**
+   * Redraw from cached counts with new colour settings. Returns false if the
+   * cache does not match the requested geometry.
+   */
+  recolor(width: number, height: number, params: RenderParams): boolean {
+    if (this.disposed || !this.countTexture || this.cacheKey === null) {
+      return false;
+    }
+    if (this.cacheKey !== this.geometryKey(width, height, params)) return false;
+    if ((params.orbit ?? null) !== this.cacheOrbit) return false;
+
+    const gl = this.gl;
+    const canvas = gl.canvas as HTMLCanvasElement;
+    if (canvas.width !== width || canvas.height !== height) return false;
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.drawColorize(width, height, params);
+    return true;
+  }
+
+  /** Release the count buffer. Worth doing as soon as cycling stops. */
+  disposeCountCache(): void {
+    const gl = this.gl;
+    if (this.countTexture) gl.deleteTexture(this.countTexture);
+    if (this.countFramebuffer) gl.deleteFramebuffer(this.countFramebuffer);
+    this.countTexture = null;
+    this.countFramebuffer = null;
+    this.countDims = [0, 0];
+    this.cacheKey = null;
+    this.cacheOrbit = null;
   }
 
   /**
@@ -283,6 +543,13 @@ export class MandelbrotRenderer {
     this.programs.clear();
     this.orbitTexture = null;
     this.uploadedOrbit = null;
+    // The GL objects are gone with the context; drop the handles, do not
+    // try to delete them.
+    this.countTexture = null;
+    this.countFramebuffer = null;
+    this.countDims = [0, 0];
+    this.cacheKey = null;
+    this.cacheOrbit = null;
   }
 
   dispose(): void {
@@ -292,6 +559,7 @@ export class MandelbrotRenderer {
     for (const { program } of this.programs.values()) gl.deleteProgram(program);
     this.programs.clear();
     gl.deleteShader(this.vertexShader);
+    this.disposeCountCache();
     if (this.vao) gl.deleteVertexArray(this.vao);
     if (this.orbitTexture) gl.deleteTexture(this.orbitTexture);
     this.vao = null;

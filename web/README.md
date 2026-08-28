@@ -1,4 +1,4 @@
-# Mandelbrot Explorer — web
+# mandelbrot.lol — web
 
 Real-time Mandelbrot explorer. Next.js shell, all rendering in a WebGL2 fragment
 shader on the client.
@@ -76,6 +76,34 @@ pixels where two accurate algorithms legitimately differ in the last iteration.
 The `double` kernel itself matched a float64 CPU reference on 99.4% of pixels,
 median difference 0.
 
+**Colour cycling.** Animating the gradient would otherwise re-run the whole
+escape-time kernel every frame, which is hopeless at deep zoom. Instead the two
+halves are split: a *count* pass writes the smooth escape count of every
+supersample into an R32F texture, and a *colourise* pass reads that texture and
+applies the palette. Only the second one reruns while cycling, so the animation
+holds full resolution and supersampling at any zoom depth. The count buffer is
+allocated on demand, capped at 32M samples (~128MB), and released when cycling
+stops; without `EXT_color_buffer_float`, or above the cap, the renderer falls
+back to the single-pass path.
+
+The two paths have to agree, or toggling the animation would visibly shimmer.
+They do, bit-for-bit: the count shader recovers the pixel and sample index from
+`gl_FragCoord` with integer maths and then evaluates the *same* uv expression as
+the single-pass shader. This is not cosmetic. The obvious shortcut —
+`gl_FragCoord.xy / (uResolution * AA)`, which is algebraically identical —
+rounds differently in float32 and disagrees on 8.1% of samples by one ULP. A
+float32 CPU reference over 86,016 sample positions (53,787 distinct uv values,
+spanning AA 1–3 and six canvas widths) reports 0 mismatches for the form that
+shipped and 6,967 for the shortcut. Rerun it with
+`node web/scripts/check-sample-parity.mjs`.
+
+**Performance.** The view lives in a ref, not React state, so panning never
+triggers a React render. A dirty flag gates the rAF loop. While the pointer is
+moving the canvas renders at a fraction of full resolution with anti-aliasing
+off; ~180ms after the view settles it repaints at full resolution with
+supersampling. Programs are compiled and cached per `(precision, AA)` pair, with
+the AA factor baked in as a constant so the sample loop unrolls.
+
 ## Exporting
 
 Export sizes go up to 32K (30720x17280 = 531 Mpx). At that size neither of the
@@ -120,13 +148,6 @@ any rendering starts: no Compression Streams API, or a `navigator.deviceMemory`
 too small for the estimated peak. The download link is only created after the
 last byte is encoded, so a failure at any point leaves no file rather than a
 truncated one.
-
-**Performance.** The view lives in a ref, not React state, so panning never
-triggers a React render. A dirty flag gates the rAF loop. While the pointer is
-moving the canvas renders at a fraction of full resolution with anti-aliasing
-off; ~180ms after the view settles it repaints at full resolution with
-supersampling. Programs are compiled and cached per `(precision, AA)` pair, with
-the AA factor baked in as a constant so the sample loop unrolls.
 
 ## Layout
 
