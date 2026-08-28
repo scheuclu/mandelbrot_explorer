@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "check": "npm run check:shaders && npm run check:parity",
+    "check:shaders": "node --experimental-strip-types scripts/check-shader-glsl.mjs",
+    "check:parity": "node scripts/check-sample-parity.mjs"
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",

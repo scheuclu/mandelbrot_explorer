@@ -356,9 +356,10 @@ void main() {
   // gl_FragCoord is the sample centre, so truncating gives the sample index.
   ivec2 q = ivec2(gl_FragCoord.xy);
   ivec2 pixel = q / AA;
-  ivec2 sample = q - pixel * AA;
-  int sx = sample.x;
-  int sy = sample.y;
+  // Not "sample": that is a reserved word in GLSL ES 3.00 and fails to compile.
+  ivec2 sub = q - pixel * AA;
+  int sx = sub.x;
+  int sy = sub.y;
   vec2 uv = (vec2(pixel) + (vec2(float(sx), float(sy)) + 0.5) / float(AA)) / uResolution;
   ${sampleExpr(kernel)}
   fragColor = vec4(sn, 0.0, 0.0, 1.0);

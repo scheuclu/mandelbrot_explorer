@@ -37,9 +37,16 @@ npm install
 npm run dev     # http://localhost:3000
 npm run build
 npm run lint
+npm run check   # GLSL + sample-parity checks (see below)
 ```
 
-There are no automated tests in either project.
+There is no test suite. `npm run check` is the closest thing: two standalone
+scripts under `web/scripts/` that guard the two failure modes a build cannot
+see. `check:shaders` generates every GLSL variant and rejects identifiers that
+collide with GLSL ES 3.00 reserved words — `ivec2 sample` compiled fine in
+TypeScript and broke colour cycling on the GPU. `check:parity` proves the count
+shader samples exactly where the single-pass shader does. Run both after
+touching `lib/shader.ts`.
 
 ## Architecture
 
