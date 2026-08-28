@@ -59,6 +59,15 @@ export const PRECISION_OPTIONS: { value: PrecisionMode; label: string }[] = [
 export const ANIMATE_SPEED = { min: 0.02, max: 1, step: 0.02 };
 
 /**
+ * How long an interaction must hold still before it counts as finished.
+ *
+ * The renderer waits this long after the view stops moving before repainting at
+ * full quality, and the analytics helpers wait the same before reporting a
+ * slider or picker, so "the user settled on this" means one thing everywhere.
+ */
+export const SETTLE_MS = 180;
+
+/**
  * Fold an offset back into one period. The sawtooth ramp repeats every 1 and
  * the ping-pong ramp every 2, so 2 is a whole number of cycles for both — and
  * wrapping keeps the accumulated float from drifting over a long run.

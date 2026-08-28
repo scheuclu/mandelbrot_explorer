@@ -107,6 +107,13 @@ The render loop lives entirely on the GPU. Nothing is recomputed in JS per pixel
   `CompressionStream("deflate")` rather than going near a canvas. Sizes that
   cannot work here are disabled in the picker with the reason shown.
 
+- **`lib/analytics.ts`** — the only place `track()` is called. Custom events are
+  quota-metered and this app is a 60fps loop with sliders and continuous pointer
+  input, so every event is throttled inside the module (`once` per page load,
+  `settled` after 180ms, or `direct` for deliberate actions) and call sites stay
+  one-liners. Never call `track()` from the render loop or a slider `onChange`.
+  Properties are enumerated and bucketed — no coordinates, no free text.
+
 - **`components/MandelbrotExplorer.tsx`** — owns the rAF render loop. The view
   lives in a **ref**, not React state, so panning never triggers a React render;
   a `dirty` flag decides whether a frame is drawn. While the pointer is moving

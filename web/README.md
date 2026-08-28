@@ -168,4 +168,31 @@ lib/
   settings.ts           settings model and defaults
   download.ts           export sizes, tiling plan, export orchestration
   png.ts                streaming PNG encoder (no canvas, no size ceiling)
+  analytics.ts          typed custom events, with the throttling they need
 ```
+
+## Analytics
+
+Page views come from `<Analytics />` in the layout. Custom events go through
+`lib/analytics.ts`, which is the only file allowed to call `track()`.
+
+Events are metered — page views and custom events share one monthly pool — and
+this app is a 60fps render loop with sliders and continuous pointer input, so
+every event is throttled at the helper rather than at the call site: **once** per
+page load (capabilities, zoom milestones, errors), **settled** 180ms after the
+last change (pickers, the cycling toggle), or **direct** for something as
+deliberate as a finished export. Nothing is reported per frame, per wheel tick or
+per slider tick.
+
+Property values are numbers, booleans, or members of a closed set declared in
+the module. No coordinates and no free text: the zoom goes out as one of nine
+buckets and error messages are matched down to a handful of tags.
+
+`MAX_PROPERTIES` there is a plan limit, not a protocol one — Vercel keeps 2
+properties per event on Pro and 8 with Web Analytics Plus. Two events declare
+more than two properties, and both list them most-important-first so trimming
+the constant degrades them predictably.
+
+`track()` does not send anything in development: the SDK loads a debug script
+that logs to the console instead, so call sites can be verified locally but the
+numbers only appear from a deployment.

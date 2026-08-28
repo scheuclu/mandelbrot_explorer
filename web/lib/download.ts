@@ -135,36 +135,74 @@ export function peakExportBytes(
 }
 
 /**
+ * Memory this device admits to, in GB. Chromium-only, rounded down to a power
+ * of two and capped at 8; absent everywhere else, which means "no idea" rather
+ * than "none".
+ */
+export function deviceMemoryGb(): number | null {
+  return (
+    (globalThis.navigator as (Navigator & { deviceMemory?: number }) | undefined)
+      ?.deviceMemory ?? null
+  );
+}
+
+/** Which of the three checks in `exportBlock` refused a size. */
+export type ExportBlockReason =
+  | "no_render_size"
+  | "no_compression_streams"
+  | "low_device_memory";
+
+export interface ExportBlock {
+  /** Low-cardinality tag, for reporting. */
+  reason: ExportBlockReason;
+  /** Sentence shown under the size picker. */
+  message: string;
+}
+
+/**
  * Why this size cannot be exported here, or null if it can. Checked up front so
  * an impossible export is refused before it burns minutes of GPU time — half an
  * hour of rendering followed by an out-of-memory crash is the one outcome worth
  * going out of the way to avoid.
  */
-export function exportBlocker(
+export function exportBlock(
   size: ExportSize,
   maxRenderSize: number,
-): string | null {
+): ExportBlock | null {
   if (!Number.isFinite(maxRenderSize) || maxRenderSize < 256) {
-    return "This GPU reports no usable offscreen render size.";
+    return {
+      reason: "no_render_size",
+      message: "This GPU reports no usable offscreen render size.",
+    };
   }
   // Everything at 8K and below shipped before any of this existed and keeps
   // working unconditionally; only the two new sizes have to justify themselves.
   if (size.width * size.height <= CANVAS_FALLBACK_MAX_PIXELS) return null;
 
   if (!supportsStreamingPng()) {
-    return `${size.label} needs the Compression Streams API, which this browser does not have — a ${size.width}x${size.height} image is far too large for a canvas.`;
+    return {
+      reason: "no_compression_streams",
+      message: `${size.label} needs the Compression Streams API, which this browser does not have — a ${size.width}x${size.height} image is far too large for a canvas.`,
+    };
   }
 
-  // Chromium-only, rounded down to a power of two and capped at 8. Absent means
-  // "no idea", which is let through rather than guessed at.
-  const deviceMemoryGb = (
-    globalThis.navigator as (Navigator & { deviceMemory?: number }) | undefined
-  )?.deviceMemory;
+  const memoryGb = deviceMemoryGb();
   const needed = peakExportBytes(size, maxRenderSize);
-  if (deviceMemoryGb !== undefined && needed * 3 > deviceMemoryGb * 1e9) {
-    return `${size.label} needs upwards of ${formatBytes(needed)} of memory and this device reports only ${deviceMemoryGb} GB.`;
+  if (memoryGb !== null && needed * 3 > memoryGb * 1e9) {
+    return {
+      reason: "low_device_memory",
+      message: `${size.label} needs upwards of ${formatBytes(needed)} of memory and this device reports only ${memoryGb} GB.`,
+    };
   }
   return null;
+}
+
+/** Just the sentence, for the call sites that only want something to display. */
+export function exportBlocker(
+  size: ExportSize,
+  maxRenderSize: number,
+): string | null {
+  return exportBlock(size, maxRenderSize)?.message ?? null;
 }
 
 /** One-line warning shown under the size picker, or null for the small ones. */
