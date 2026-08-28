@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { analytics, zoomBucket } from "@/lib/analytics";
 import { toNumber } from "@/lib/bigfloat";
 import {
   EXPORT_MIN_AA,
@@ -9,10 +10,13 @@ import {
   type ExportProgress,
   type ExportSizeId,
   describeExport,
+  deviceMemoryGb,
+  exportBlock,
   exportBlocker,
   exportPng,
 } from "@/lib/download";
 import { paletteIndex } from "@/lib/palettes";
+import { supportsStreamingPng } from "@/lib/png";
 import { PRESETS } from "@/lib/presets";
 import {
   type ReferenceOrbit,
@@ -23,6 +27,7 @@ import { MandelbrotRenderer, type RenderParams } from "@/lib/renderer";
 import type { KernelMode } from "@/lib/shader";
 import {
   DEFAULT_SETTINGS,
+  SETTLE_MS,
   type Settings,
   wrapColorOffset,
 } from "@/lib/settings";
@@ -39,14 +44,13 @@ import {
   encodeHash,
   panByPixels,
   zoomAt,
+  zoomFactor,
 } from "@/lib/view";
 import { ControlPanel } from "./ControlPanel";
 import { StatusBar } from "./StatusBar";
 import { WelcomeDialog, useWelcomeDialog } from "./WelcomeDialog";
 
 const INTERIOR_COLOR: [number, number, number] = [0, 0, 0];
-/** How long the view must hold still before the full-quality pass runs. */
-const SETTLE_MS = 180;
 const MAX_DPR = 2;
 
 export interface Readout {
@@ -73,6 +77,8 @@ export function MandelbrotExplorer() {
   // Mirrored into a ref so the keyboard handler can ignore shortcuts while the
   // dialog is up without re-registering its listeners on every toggle.
   const infoOpenRef = useRef(false);
+  // A dismissal only means something after the dialog has actually been up.
+  const welcomeShownRef = useRef(false);
   // Read by the render loop, which must not fight the export for the GPU.
   const exportingRef = useRef(false);
   /**
@@ -123,7 +129,22 @@ export function MandelbrotExplorer() {
     settingsRef.current = next;
     setSettings(next);
     dirtyRef.current = true;
+    analytics.colorAnimationToggle(next.animate);
   }, [liveColorOffset]);
+
+  /**
+   * The panel's way in. It hands over a whole Settings object on every input
+   * tick, so this reports only the two fields with real signal and leaves the
+   * debouncing to the helpers — a slider drag must not become fifty events.
+   */
+  const changeSettings = useCallback((next: Settings) => {
+    const previous = settingsRef.current;
+    if (next.palette !== previous.palette) analytics.paletteChange(next.palette);
+    if (next.precision !== previous.precision) {
+      analytics.precisionChange(next.precision);
+    }
+    setSettings(next);
+  }, []);
 
   /** Mark the view as actively changing; schedule the sharp pass afterwards. */
   const beginInteraction = useCallback(() => {
@@ -242,6 +263,8 @@ export function MandelbrotExplorer() {
       } catch (err) {
         failed = true;
         setError(err instanceof Error ? err.message : String(err));
+        // Runs once, on the first frame only, and the loop is dead afterwards.
+        analytics.webglError(err);
       }
     };
 
@@ -298,6 +321,10 @@ export function MandelbrotExplorer() {
         if (!cached) renderer.render(width, height, params);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
+        // The only report from inside the loop, and it cannot repeat: the loop
+        // is cancelled on the next line, and the helper is once-per-session
+        // anyway.
+        analytics.webglError(err, "render");
         cancelAnimationFrame(raf);
         return;
       }
@@ -336,6 +363,7 @@ export function MandelbrotExplorer() {
       failed = true;
       renderer?.invalidate();
       setError("The GPU context was lost. Reload the page to continue.");
+      analytics.contextLost(exportingRef.current);
     };
     canvas.addEventListener("webglcontextlost", onContextLost);
 
@@ -354,9 +382,51 @@ export function MandelbrotExplorer() {
     dirtyRef.current = true;
   }, [settings]);
 
+  // Driven off the open flag rather than the close handler so the button,
+  // Escape, the X and the backdrop all report identically. A returning visitor
+  // starts closed and reports nothing, because nothing was dismissed.
   useEffect(() => {
     infoOpenRef.current = welcome.open;
+    if (welcome.open) {
+      welcomeShownRef.current = true;
+      analytics.welcomeDialog("shown");
+    } else if (welcomeShownRef.current) {
+      analytics.welcomeDialog("dismissed");
+    }
   }, [welcome.open]);
+
+  // What this device can actually do, reported once. `maxRenderSize` is set
+  // exactly once, immediately after the GL context is created, so this effect
+  // body runs once too — and every helper it calls is once-guarded regardless.
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    if (maxRenderSize === null || !renderer) return;
+
+    const blocks = EXPORT_SIZES.map(
+      (size) => [size, exportBlock(size, maxRenderSize)] as const,
+    );
+    // EXPORT_SIZES runs small to large, so the last unblocked one is the cap.
+    const largest = blocks.filter(([, block]) => block === null).at(-1);
+
+    analytics.sessionCapabilities({
+      max_export: largest?.[0].id ?? "none",
+      max_render_size: maxRenderSize,
+      compression_streams: supportsStreamingPng(),
+      color_buffer_float: renderer.supportsCountCache,
+      device_memory_gb: deviceMemoryGb(),
+    });
+
+    for (const [size, block] of blocks) {
+      if (block) analytics.exportBlocked(size.id, block.reason);
+    }
+  }, [maxRenderSize]);
+
+  // Deriving the bucket during render means this effect only runs when the
+  // decade changes, not on every one of the ~8 readout updates a second.
+  const zoomDepth = zoomBucket(zoomFactor(readout.view));
+  useEffect(() => {
+    analytics.zoomDepth(zoomDepth);
+  }, [zoomDepth]);
 
   // The count buffer is the largest allocation the renderer makes; do not sit
   // on it once nothing is cycling.
@@ -600,6 +670,7 @@ export function MandelbrotExplorer() {
         setSettings(next);
       }
       dirtyRef.current = true;
+      analytics.presetJump(preset.id);
     },
     [],
   );
@@ -620,12 +691,17 @@ export function MandelbrotExplorer() {
       colorOffset: liveColorOffset(),
     });
     const url = `${window.location.origin}${window.location.pathname}#${hash}`;
+    // How deep the shared views are is the interesting half of this; the URL
+    // itself is not sent.
+    const zoom = zoomBucket(zoomFactor(viewRef.current));
     try {
       await navigator.clipboard.writeText(url);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
+      analytics.copyLink(zoom, "ok");
     } catch {
       setError("Could not write to the clipboard.");
+      analytics.copyLink(zoom, "failed");
     }
   }, [liveColorOffset]);
 
@@ -667,8 +743,9 @@ export function MandelbrotExplorer() {
     // Let the button repaint before the GPU stalls on a big render.
     await new Promise((resolve) => window.setTimeout(resolve, 0));
 
+    const view = viewRef.current;
     try {
-      const params = resolveParams(viewRef.current, settingsRef.current);
+      const params = resolveParams(view, settingsRef.current);
       params.aa = Math.max(EXPORT_MIN_AA, settingsRef.current.quality);
       // Freeze the gradient where the animation currently has it, so the file
       // matches what is on screen.
@@ -682,8 +759,16 @@ export function MandelbrotExplorer() {
         filename: `mandelbrot-${target.id}-${settingsRef.current.palette}.png`,
         onProgress: setExportProgress,
       });
+      analytics.exportPng({
+        size: target.id,
+        zoom: zoomBucket(zoomFactor(view)),
+        palette: settingsRef.current.palette,
+        kernel: params.kernel,
+        aa: params.aa,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      analytics.exportFailed(target.id, err);
     } finally {
       exportingRef.current = false;
       setExporting(false);
@@ -711,7 +796,7 @@ export function MandelbrotExplorer() {
 
       <ControlPanel
         settings={settings}
-        onChange={setSettings}
+        onChange={changeSettings}
         onPreset={applyPreset}
         onReset={reset}
         onCopyLink={copyLink}
